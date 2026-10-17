@@ -60,7 +60,7 @@ Code, docs and issues use these terms consistently:
 
 ## Checks
 
-Run these before opening a pull request; CI runs the same on Windows, macOS and Linux:
+Run these before opening a pull request:
 
 ```bash
 cargo fmt --all --check
@@ -76,6 +76,19 @@ cargo test --workspace --all-features -- --ignored
 
 Write tests for new behaviour and for every bug fix: a test that fails before the fix and passes after it. GUI logic lives in a model separate from rendering so it can be tested headless.
 
+### What CI runs
+
+- **Every pull request** runs the fast gate (`ci.yml`): commit messages, `rustfmt`, and clippy plus the tests on Linux x86_64. Pull requests that only change documentation skip the Rust jobs.
+- **The full matrix** (`full.yml`) builds and tests on Windows, macOS and both Linux architectures, makes release builds, enforces the binary size budgets and runs the texture oracle. It runs nightly when `main` has changed, on release-plz's release pull request, and on any pull request with the `full-ci` label. Add that label when your change is platform-specific or adds a dependency.
+
+### Optional git hooks
+
+The repository ships hooks that catch the two most common CI failures before you push: unformatted code (`pre-commit`) and a commit message that breaks the conventions (`commit-msg`, which needs `cargo install --locked committed`). Enable them once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Commits and pull requests
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for example `fix(gui): keep preview cells from overlapping`.
@@ -84,6 +97,8 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 - **Scopes:** a crate (`core`, `unity`, `image`, `audio`, `cli`, `gui`) or an area (`ci`, `release`, `readme`).
 
 release-plz builds the changelog and the next version number from these messages, so they matter: `feat` and `fix` commits appear in release notes, `chore`, `ci`, `build` and `test` do not.
+
+`main` is protected: every change, including maintainers', lands through a pull request whose checks pass. Commits are linted with [`committed`](https://github.com/crate-ci/committed) using the rules in `committed.toml`: a subject of at most 72 characters in the imperative mood, no `fixup!` or WIP commits, and no merge commits inside a pull request (rebase on `main` instead). Pull requests merge with a merge commit or a rebase, so each linted commit reaches `main` unchanged.
 
 For pull requests:
 

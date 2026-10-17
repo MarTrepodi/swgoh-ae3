@@ -1,0 +1,13 @@
+# Commit message rules, checked by `committed` in CI on every pull request
+# and, optionally, by the commit-msg hook in .githooks/. release-plz builds
+# the changelog and the next version from these messages.
+style = "conventional"
+allowed_types = ["feat", "fix", "perf", "refactor", "docs", "test", "build", "ci", "chore", "revert", "style"]
+allowed_scopes = ["core", "unity", "image", "audio", "cli", "gui", "oracle", "ci", "release", "readme", "changelog", "deps"]
+# Conventional descriptions start in lower case: "fix(gui): keep cells apart".
+subject_capitalized = false
+subject_length = 72
+line_length = 80
+imperative_subject = true
+no_fixup = true
+no_wip = true

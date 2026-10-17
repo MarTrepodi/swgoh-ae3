@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Opt-in pre-commit hook: refuse a commit whose Rust code is not formatted.
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+if ! cargo fmt --all --check >/dev/null 2>&1; then
+  echo "pre-commit: code is not formatted; run 'cargo fmt --all' and commit again." >&2
+  exit 1
+fi
