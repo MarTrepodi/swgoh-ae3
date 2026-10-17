@@ -4,7 +4,7 @@
 //! The usual flow: resolve a [`CdnLocation`] with a [`Resolver`], open a
 //! [`PackageCache`], then a [`PackageStore`] for the Asset Version. Through
 //! the store, open a Bundle Package as a [`LoadedBundle`] (list its Assets,
-//! decode textures, read Atlases, Structured data and text) or an Audio
+//! decode textures and Meshes, read Atlases, Structured data and text) or an Audio
 //! Package as a [`LoadedAudioPackage`], and export a [`Selection`] with
 //! [`PackageStore::export`] into an [`ExportReport`]. To find Bundles by the
 //! names of the Assets inside them, build the [`AssetIndex`] with an
@@ -22,6 +22,7 @@ pub mod guard;
 pub mod http;
 pub mod index;
 pub mod manifest;
+pub mod mesh;
 pub mod paths;
 pub mod platform;
 pub mod sniff;
@@ -59,6 +60,7 @@ pub use index::{
     IndexedPackage, SearchHit, SearchResults,
 };
 pub use manifest::{AssetListing, Manifest, Package, PackageKind, category_of};
+pub use mesh::{Mesh, SubMesh};
 pub use platform::Platform;
 pub use sniff::{sniff_audio_extension, sniff_text_extension};
 pub use store::{PackageStore, Selection};
