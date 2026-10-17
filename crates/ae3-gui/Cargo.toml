@@ -23,6 +23,10 @@ egui_extras = { version = "0.37", default-features = false }
 # Native folder picker. The xdg-portal backend talks D-Bus on Linux, so no
 # GTK is linked; macOS and Windows use the system dialogs.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+# Sound playback through cpal, without rodio's decoders: ae3-audio decodes
+# to PCM. On Linux cpal links ALSA (libasound.so.2), so building needs its
+# headers (libasound2-dev); cpal has no dlopen option.
+rodio = { version = "0.23", default-features = false, features = ["playback"] }
 # Reading GitHub's release answer and the saved release-check state; both
 # are already built for ae3-core.
 serde.workspace = true
@@ -66,3 +70,7 @@ include = [
     "../../THIRD-PARTY-LICENSES.md",
     "../../packaging/linux/ae3-gui.desktop",
 ]
+
+# The Linux release runners install ALSA's headers for cpal (see rodio above).
+[package.metadata.dist.dependencies.apt]
+libasound2-dev = "*"

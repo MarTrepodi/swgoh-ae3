@@ -1,6 +1,7 @@
 //! The in-app detail viewer: textures with zoom, pan and channel toggles;
 //! Atlases with their Sprites outlined; Meshes in an orbiting 3D view;
-//! Structured Assets as a tree; text with highlighting.
+//! Structured Assets as a tree; text with highlighting; AudioClips with a
+//! play control.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use eframe::egui::{
 use super::{error_label, kind_label};
 use crate::app::{Ae3App, Detail};
 use crate::highlight::{Language, TokenKind, tokenize};
+use crate::model::playback::SoundRef;
 use crate::model::table::format_bytes;
 use crate::model::viewer::{ViewTransform, sprite_at};
 use crate::tasks::{DetailContent, DetailImage};
@@ -28,6 +30,7 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
     let checker = app.checker(ctx);
     let renderer = Arc::clone(&app.mesh_renderer);
     let mut remask = false;
+    let mut play: Option<SoundRef> = None;
     egui::Window::new(title)
         .id(egui::Id::unique("ae3-detail"))
         .open(&mut open)
@@ -85,8 +88,20 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
                 Some(Ok(DetailContent::Info(text))) => {
                     ui.label(text);
                 }
+                Some(Ok(DetailContent::Audio { text, .. })) => {
+                    ui.label(text);
+                    let sound = SoundRef::Clip(detail.asset.path_id);
+                    ui.horizontal(|ui| {
+                        if super::preview::play_control(ui, app.playback.state(sound)) {
+                            play = Some(sound);
+                        }
+                    });
+                }
             }
         });
+    if let Some(sound) = play {
+        app.toggle_sound(sound);
+    }
     if let Some(detail) = &mut app.detail {
         detail.open = open;
     }

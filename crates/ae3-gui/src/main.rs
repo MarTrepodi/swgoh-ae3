@@ -13,6 +13,7 @@
 mod app;
 mod highlight;
 mod model;
+mod output;
 mod tasks;
 mod ui;
 mod worker;
