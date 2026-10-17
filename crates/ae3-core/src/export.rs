@@ -42,6 +42,7 @@ use crate::bundle::{
 use crate::config::{AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout};
 use crate::download::DEFAULT_PARALLEL_DOWNLOADS;
 use crate::error::AssetError;
+use crate::guard::catch_panic;
 
 /// The longest file name stem AE3 writes, in bytes, leaving room for a
 /// `_{path_id}` suffix and an extension within common 255-byte limits.
@@ -579,13 +580,19 @@ impl<'a> Batch<'a> {
         let explicit = path_ids.is_some();
         let mut planned: Vec<Planned<'_>> = Vec::with_capacity(selected.len());
         for info in selected {
-            match self.plan(&view, info, explicit) {
-                Some(action) => planned.push(Planned {
+            match catch_panic(|| self.plan(&view, info, explicit)) {
+                Ok(Some(action)) => planned.push(Planned {
                     stem: stem_for(info, action.extension(self.image_ext())),
                     info,
                     action,
                 }),
-                None => report.ignored += 1,
+                Ok(None) => report.ignored += 1,
+                Err(message) => {
+                    let name = info.display_name();
+                    let e =
+                        AssetError::panicked(format!("{package}: Asset {}", info.path_id))(message);
+                    report.failure(package, Some((&name, Some(info.path_id))), &e);
+                }
             }
         }
         planned.sort_by_key(|p| (kind_rank(p.info.kind), p.info.path_id));
@@ -599,7 +606,14 @@ impl<'a> Batch<'a> {
                 break;
             }
             let name = p.info.display_name();
-            if let Err(e) = self.export_asset(&view, &dir, p, &name, &mut report) {
+            let result = catch_panic(|| self.export_asset(&view, &dir, p, &name, &mut report))
+                .unwrap_or_else(|message| {
+                    Err(AssetError::panicked(format!(
+                        "{package}: Asset {}",
+                        p.info.path_id
+                    ))(message))
+                });
+            if let Err(e) = result {
                 report.failure(package, Some((&name, Some(p.info.path_id))), &e);
             }
             self.asset_finished(package, &name, done + 1, total);
@@ -823,7 +837,12 @@ impl<'a> Batch<'a> {
             {
                 self.skip_existing(&mut report, package, &stem, None, &dir.join(&predicted));
             } else if let Err(e) =
-                self.export_sound(audio, sound, &dir, &rel_stem, &stem, &mut report)
+                catch_panic(|| self.export_sound(audio, sound, &dir, &rel_stem, &stem, &mut report))
+                    .unwrap_or_else(|message| {
+                        Err(AssetError::panicked(format!("{package}: sound {stem}"))(
+                            message,
+                        ))
+                    })
             {
                 report.failure(package, Some((&stem, None)), &e);
             }

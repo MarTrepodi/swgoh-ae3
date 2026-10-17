@@ -294,7 +294,23 @@ impl<T: Transport + Send + Sync + 'static> PackageStore<T> {
     fn export_one(&self, batch: &Batch<'_>, package: &Package, part: &Part<'_>) -> ExportReport {
         let name = package.name.as_str();
         batch.package_started(name);
-        let mut report = match package.kind {
+        // Opening a Package parses it; contain a panic there to this Package.
+        let mut report = crate::guard::catch_panic(|| self.export_package(batch, package, part))
+            .unwrap_or_else(|message| failed(name, &AssetError::panicked(name)(message)));
+        if !report.cancelled {
+            batch.package_finished(name, &mut report);
+        }
+        report
+    }
+
+    fn export_package(
+        &self,
+        batch: &Batch<'_>,
+        package: &Package,
+        part: &Part<'_>,
+    ) -> ExportReport {
+        let name = package.name.as_str();
+        match package.kind {
             PackageKind::Bundle => match self.open_bundle(name) {
                 Ok(bundle) => batch.export_bundle(
                     &bundle,
@@ -326,11 +342,7 @@ impl<T: Transport + Send + Sync + 'static> PackageStore<T> {
                 }],
                 ..ExportReport::default()
             },
-        };
-        if !report.cancelled {
-            batch.package_finished(name, &mut report);
         }
-        report
     }
 }
 

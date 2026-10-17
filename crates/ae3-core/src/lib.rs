@@ -18,6 +18,7 @@ pub mod diff;
 pub mod download;
 pub mod error;
 pub mod export;
+pub mod guard;
 pub mod http;
 pub mod index;
 pub mod manifest;

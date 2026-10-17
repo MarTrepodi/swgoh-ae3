@@ -553,7 +553,10 @@ pub fn serve<T: Transport + Send + Sync + 'static>(
                     let started = Instant::now();
                     let method = request.method().to_string();
                     let url = request.url().to_owned();
-                    let reply = state.handle(&method, &url);
+                    let reply = ae3_core::guard::catch_panic(|| state.handle(&method, &url))
+                        .unwrap_or_else(|message| {
+                            Reply::error(500, format!("internal error: {message}"))
+                        });
                     app.ui.verbose(|| {
                         format!(
                             "{method} {url} -> {} ({} ms)",
