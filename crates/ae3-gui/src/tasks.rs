@@ -5,13 +5,13 @@
 //! the generation they were started for and compare it with a shared
 //! counter before each expensive step.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use ae3_core::ae3_image::{self, RgbaImage};
-use ae3_core::http::UreqTransport;
+use ae3_core::http::{Transport, UreqTransport};
 use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
@@ -25,6 +25,7 @@ use crate::model::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use crate::model::jobs::{Generation, Throttle};
 use crate::model::mesh::MeshPreview;
 use crate::model::preview::THUMBNAIL_PX;
+use crate::model::release::{self, ReleaseState};
 use crate::model::table::SearchMatches;
 use crate::model::viewer::Channels;
 use crate::worker::Outbox;
@@ -217,6 +218,8 @@ pub enum Msg {
         result: Result<(Arc<Diff>, Store), String>,
     },
     ConfigSaved(Result<(), String>),
+    /// What the "AE3 vX available" check knows.
+    ReleaseChecked(ReleaseState),
 }
 
 pub type Mailbox = Outbox<Msg>;
@@ -637,6 +640,54 @@ pub fn diff(
     Ok((Arc::new(diff), new_store))
 }
 
+/// The "AE3 vX available" check: reads the saved state at `path`, asks
+/// GitHub for the latest release when a day has passed since the last
+/// check, and saves the outcome. Failures (a 404 while the repository is
+/// not public, no network, an unwritable cache) are silent.
+pub fn check_release<T: Transport + ?Sized>(
+    transport: &T,
+    path: Option<&Path>,
+    now: u64,
+) -> ReleaseState {
+    let mut state = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| ReleaseState::parse(&text))
+        .unwrap_or_default();
+    if !state.is_due(now) {
+        return state;
+    }
+    let found = release::latest_release_api(release::REPOSITORY)
+        .and_then(|url| transport.get_text(&url).ok())
+        .and_then(|body| release::parse_latest_release(&body, release::REPOSITORY));
+    state.checked(now, found);
+    if let Some(path) = path {
+        save_release_state(&state, path);
+    }
+    state
+}
+
+/// Saves the release-check state, best effort: losing it only means one
+/// more check.
+pub fn save_release_state(state: &ReleaseState, path: &Path) {
+    let tmp = path.with_extension("json.tmp");
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, state.to_json()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Seconds since the Unix epoch.
+#[must_use]
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Writes the configuration file.
 pub fn save_config(file: &ae3_core::ConfigFile, path: &std::path::Path) -> Result<(), String> {
     file.save(path).map_err(|e| e.to_string())
@@ -866,6 +917,95 @@ mod tests {
         assert_eq!(cached.location().base_url, store.location().base_url);
         assert!(matches!(latest, Latest::Located(l) if l.asset_version == version));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Answers GitHub's latest-release URL with `body`, or 404 without one,
+    /// and counts the requests.
+    struct FakeGitHub {
+        body: Option<&'static str>,
+        requests: std::cell::Cell<usize>,
+    }
+
+    impl Transport for FakeGitHub {
+        fn get_bytes(&self, url: &str) -> Result<Vec<u8>, ae3_core::http::HttpError> {
+            self.requests.set(self.requests.get() + 1);
+            assert_eq!(
+                url,
+                "https://api.github.com/repos/swgoh-utils/swgoh-ae3/releases/latest"
+            );
+            self.body.map(|b| b.as_bytes().to_vec()).ok_or_else(|| {
+                ae3_core::http::HttpError::Status {
+                    url: url.to_owned(),
+                    status: 404,
+                }
+            })
+        }
+
+        fn get_range(
+            &self,
+            url: &str,
+            _start: u64,
+            _end_inclusive: u64,
+        ) -> Result<ae3_core::http::RangeResponse, ae3_core::http::HttpError> {
+            panic!("unexpected Range request for {url}");
+        }
+
+        fn exists(&self, url: &str) -> Result<bool, ae3_core::http::HttpError> {
+            panic!("unexpected probe of {url}");
+        }
+    }
+
+    #[test]
+    fn release_check_asks_github_once_a_day_and_survives_a_404() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-release-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(ReleaseState::FILE);
+        let day = release::CHECK_INTERVAL.as_secs();
+        let t0 = 1_800_000_000;
+
+        // Not published there yet: silent, but remembered as checked.
+        let missing = FakeGitHub {
+            body: None,
+            requests: std::cell::Cell::new(0),
+        };
+        let state = check_release(&missing, Some(&path), t0);
+        assert_eq!(missing.requests.get(), 1);
+        assert_eq!(state.latest, None);
+        assert_eq!(state.checked_at, Some(t0));
+        assert!(path.exists(), "the check is remembered");
+        check_release(&missing, Some(&path), t0 + day - 1);
+        assert_eq!(missing.requests.get(), 1, "not again the same day");
+
+        let published = FakeGitHub {
+            body: Some(
+                r#"{"tag_name":"v99.0.0","html_url":"https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v99.0.0"}"#,
+            ),
+            requests: std::cell::Cell::new(0),
+        };
+        let state = check_release(&published, Some(&path), t0 + day);
+        assert_eq!(published.requests.get(), 1);
+        let (version, found) = state.notice(release::ReleaseVersion::current()).unwrap();
+        assert_eq!(version.major, 99);
+        assert!(found.url.ends_with("/v99.0.0"));
+        // The next start shows it without asking.
+        let again = check_release(&published, Some(&path), t0 + day + 60);
+        assert_eq!(published.requests.get(), 1);
+        assert_eq!(again, state);
+
+        // Without a cache directory nothing is remembered, but it works.
+        let state = check_release(&published, None, t0);
+        assert!(state.latest.is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Asks the real GitHub. While the repository is not public there the
+    /// answer is a 404, which must leave no notice and no error.
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_release_check_is_quiet() {
+        let state = check_release(&UreqTransport::new(), None, unix_now());
+        assert!(state.checked_at.is_some());
+        eprintln!("latest release: {:?}", state.latest);
     }
 
     #[test]

@@ -18,6 +18,7 @@ use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
 use crate::model::mesh::OrbitCamera;
+use crate::model::release::ReleaseState;
 use crate::model::startup::LatestDecision;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::{Channels, ViewTransform};
@@ -172,6 +173,45 @@ impl Ae3App {
     /// [`Ae3App::new`] so tests build an app that stays offline.
     pub fn start(&mut self) {
         self.start_up();
+        if self.config.check_for_updates {
+            self.start_release_check();
+        }
+    }
+
+    // ---- AE3 release notice --------------------------------------------
+
+    /// Where the release check remembers its last answer.
+    fn release_state_path(&self) -> Option<PathBuf> {
+        self.services
+            .config
+            .effective_cache_dir()
+            .map(|dir| dir.join(ReleaseState::FILE))
+    }
+
+    /// Looks for a newer AE3 release on a thread of its own; GitHub is
+    /// asked at most once a day.
+    fn start_release_check(&mut self) {
+        let path = self.release_state_path();
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-release-check", move || {
+            let transport = ae3_core::http::UreqTransport::new();
+            let state = tasks::check_release(&transport, path.as_deref(), tasks::unix_now());
+            outbox.send(Msg::ReleaseChecked(state));
+        });
+    }
+
+    /// Hides the "AE3 vX available" notice until a later release.
+    pub fn dismiss_release(&mut self) {
+        let path = self.release_state_path();
+        let Some(state) = &mut self.model.release else {
+            return;
+        };
+        state.dismiss();
+        if let Some(path) = path {
+            let state = state.clone();
+            self.pool
+                .spawn(move || tasks::save_release_state(&state, &path));
+        }
     }
 
     // ---- Manifest -------------------------------------------------------
@@ -865,6 +905,7 @@ impl Ae3App {
                     self.diff_store = Some(store);
                 }
             }
+            Msg::ReleaseChecked(state) => self.model.release = Some(state),
             Msg::ConfigSaved(result) => {
                 if let Err(e) = result {
                     self.model.notice = Some(format!("Could not save settings: {e}"));
@@ -1312,6 +1353,61 @@ mod tests {
         assert_eq!(
             app.store.as_ref().unwrap().location().base_url,
             "https://mirror.invalid/PROD/"
+        );
+    }
+
+    /// Every text painted in one frame.
+    fn painted_texts(ctx: &egui::Context, app: &mut Ae3App) -> Vec<String> {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1600.0, 900.0))),
+            ..RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| crate::ui::show(app, ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn release_notice_links_to_the_release_and_stays_dismissed() {
+        let cache = TempCache::with_manifest("release-notice", None);
+        let ctx = egui::Context::default();
+        let config = Config {
+            cache_dir: Some(cache.0.clone()),
+            ..Config::default()
+        };
+        let mut app = Ae3App::new(&ctx, config, ConfigFile::default(), None, None);
+        let notice = "AE3 v99.0.0 available";
+        assert!(!painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+        let mut state = ReleaseState::default();
+        state.checked(
+            1,
+            Some(crate::model::release::Release {
+                tag: "v99.0.0".into(),
+                url: "https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v99.0.0".into(),
+            }),
+        );
+        app.handle(&ctx, Msg::ReleaseChecked(state));
+        assert!(painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+
+        app.dismiss_release();
+        assert!(!painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+        let path = cache.0.join(ReleaseState::FILE);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let saved = ReleaseState::parse(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(
+            saved.dismissed.as_deref(),
+            Some("v99.0.0"),
+            "kept for the next start"
         );
     }
 

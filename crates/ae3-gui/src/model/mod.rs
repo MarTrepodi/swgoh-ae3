@@ -12,6 +12,7 @@ pub mod jobs;
 pub mod lru;
 pub mod mesh;
 pub mod preview;
+pub mod release;
 pub mod selection;
 pub mod startup;
 pub mod table;
@@ -162,6 +163,9 @@ pub struct Model {
     pub update: UpdateCheck,
     /// The Manifest load the window starts by itself.
     pub startup: Startup,
+    /// What the AE3 release check knows; `None` until it reports, and
+    /// always when `check-for-updates` is off.
+    pub release: Option<release::ReleaseState>,
     pub extract_job: Job<ExtractProgress>,
     pub extract_label: String,
     pub summary: Option<ExtractSummary>,
