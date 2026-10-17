@@ -8,7 +8,10 @@
 //! Package as a [`LoadedAudioPackage`], and export a [`Selection`] with
 //! [`PackageStore::export`] into an [`ExportReport`]. To find Bundles by the
 //! names of the Assets inside them, build the [`AssetIndex`] with an
-//! [`IndexBuilder`] and call [`AssetIndex::search`].
+//! [`IndexBuilder`] and call [`AssetIndex::search`]. To also find them by
+//! the game's display names ("Bossk", "Hunting Party"), open the
+//! [`NameIndex`] with [`NameIndex::open`] and call
+//! [`AssetIndex::search_with_names`].
 
 pub mod audio;
 pub mod bundle;
@@ -23,6 +26,7 @@ pub mod http;
 pub mod index;
 pub mod manifest;
 pub mod mesh;
+pub mod names;
 pub mod paths;
 pub mod platform;
 pub mod sniff;
@@ -46,7 +50,7 @@ pub use bundle::{
     cut_sprite,
 };
 pub use cache::{CacheStats, PackageCache, PruneReport};
-pub use config::{Config, ConfigFile, Settings};
+pub use config::{Config, ConfigFile, Language, Settings};
 pub use diff::{Diff, DiffFilter};
 pub use download::{DownloadJob, DownloadOptions, Downloader, Progress};
 pub use error::AssetError;
@@ -61,6 +65,10 @@ pub use index::{
 };
 pub use manifest::{AssetListing, Manifest, Package, PackageKind, category_of};
 pub use mesh::{Mesh, SubMesh};
+pub use names::{
+    EntityHit, EntityKind, GameEntity, GamedataVersions, MatchRank, NameIndex, NameIndexLoad,
+    NameIndexStatus, NameMatch, NamesError, NamesEvent,
+};
 pub use platform::Platform;
 pub use sniff::{sniff_audio_extension, sniff_text_extension};
 pub use store::{PackageStore, Selection};

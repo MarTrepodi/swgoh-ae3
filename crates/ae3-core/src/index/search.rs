@@ -10,6 +10,7 @@
 use serde::{Serialize, Serializer};
 
 use super::{AssetKinds, IndexedAsset, IndexedPackage, package_kind_name};
+use crate::names::EntityHit;
 
 /// Separates names in [`SearchTable::text`]; never part of a query.
 const SEPARATOR: char = '\0';
@@ -101,6 +102,7 @@ impl SearchTable {
         }
         SearchResults {
             query: query.to_owned(),
+            entities: Vec::new(),
             hits,
             coverage,
         }
@@ -153,6 +155,11 @@ impl Coverage {
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResults<'a> {
     pub query: String,
+    /// Game Entities whose display names matched, best first, when the
+    /// search was given a Name Index
+    /// ([`AssetIndex::search_with_names`](super::AssetIndex::search_with_names));
+    /// otherwise empty.
+    pub entities: Vec<EntityHit<'a>>,
     /// Matching Packages, in name order.
     pub hits: Vec<SearchHit<'a>>,
     /// How much of the Manifest was searchable. Assets of Bundles not yet
@@ -161,14 +168,24 @@ pub struct SearchResults<'a> {
 }
 
 impl SearchResults<'_> {
+    /// How many Packages matched; [`SearchResults::entities`] are not
+    /// counted.
     #[must_use]
     pub fn len(&self) -> usize {
         self.hits.len()
     }
 
+    /// Whether no Package matched; [`SearchResults::entities`] are not
+    /// counted.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.hits.is_empty()
+    }
+
+    /// Whether nothing at all matched: no Game Entity and no Package.
+    #[must_use]
+    pub fn nothing_matched(&self) -> bool {
+        self.entities.is_empty() && self.hits.is_empty()
     }
 
     /// How many Assets matched, over all hits.

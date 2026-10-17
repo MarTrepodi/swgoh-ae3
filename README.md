@@ -168,9 +168,10 @@ atlas-cutting = true
 padding-restoration = true
 skip-existing = false
 no-cache = false
+language = "ENG_US"           # display-name search: ENG_US, FRE_FR, GER_DE, JPN_JP, ...
 ```
 
-Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING` and `AE3_NO_CACHE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_NO_CACHE` and `AE3_LANGUAGE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
 
 ## Building from source
 

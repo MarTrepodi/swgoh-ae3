@@ -194,6 +194,7 @@ fn search_names_only_needs_no_index() {
         [
             "asset_version",
             "coverage",
+            "entities",
             "hits",
             "names_only",
             "platform",
