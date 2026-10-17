@@ -689,16 +689,12 @@ impl<'a> BundleView<'a> {
 
     fn classify(&self, object: &ObjectInfo) -> AssetKind {
         match object.class_id {
-            CLASS_TEXTURE_2D => AssetKind::Texture,
-            CLASS_SPRITE => AssetKind::Sprite,
-            CLASS_TEXT_ASSET => AssetKind::Text,
-            CLASS_MESH => AssetKind::Mesh,
-            CLASS_AUDIO_CLIP => AssetKind::Audio,
             CLASS_MONO_BEHAVIOUR if self.is_atlas(object) => AssetKind::Atlas,
             CLASS_MONO_BEHAVIOUR => AssetKind::Structured,
-            class if is_other_class(class, &object.type_name) => AssetKind::Other,
-            _ if self.file.type_tree(object).is_some() => AssetKind::Structured,
-            _ => AssetKind::Other,
+            class => match kind_of_class(class, &object.type_name) {
+                AssetKind::Structured if self.file.type_tree(object).is_none() => AssetKind::Other,
+                kind => kind,
+            },
         }
     }
 
@@ -1175,6 +1171,23 @@ impl<'a> BundleView<'a> {
             .to_vec();
         let extension = sniff_audio_extension(&bytes);
         Ok(AudioClipData { bytes, extension })
+    }
+}
+
+/// An Asset's kind from its class alone, for listings that have no TypeTree
+/// at hand (such as the Asset Index's prefix probes). A MonoBehaviour is
+/// reported as Structured, since telling an Atlas apart needs its fields, and
+/// any other data class as Structured, since SWGOH ships TypeTrees.
+pub(crate) fn kind_of_class(class_id: i32, type_name: &str) -> AssetKind {
+    match class_id {
+        CLASS_TEXTURE_2D => AssetKind::Texture,
+        CLASS_SPRITE => AssetKind::Sprite,
+        CLASS_TEXT_ASSET => AssetKind::Text,
+        CLASS_MESH => AssetKind::Mesh,
+        CLASS_AUDIO_CLIP => AssetKind::Audio,
+        CLASS_MONO_BEHAVIOUR => AssetKind::Structured,
+        class if is_other_class(class, type_name) => AssetKind::Other,
+        _ => AssetKind::Structured,
     }
 }
 

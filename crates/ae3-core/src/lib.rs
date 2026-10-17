@@ -6,7 +6,9 @@
 //! the store, open a Bundle Package as a [`LoadedBundle`] (list its Assets,
 //! decode textures, read Atlases, Structured data and text) or an Audio
 //! Package as a [`LoadedAudioPackage`], and export a [`Selection`] with
-//! [`PackageStore::export`] into an [`ExportReport`].
+//! [`PackageStore::export`] into an [`ExportReport`]. To find Bundles by the
+//! names of the Assets inside them, build the [`AssetIndex`] with an
+//! [`IndexBuilder`] and call [`AssetIndex::search`].
 
 pub mod audio;
 pub mod bundle;
@@ -17,6 +19,7 @@ pub mod download;
 pub mod error;
 pub mod export;
 pub mod http;
+pub mod index;
 pub mod manifest;
 pub mod paths;
 pub mod platform;
@@ -48,6 +51,11 @@ pub use error::AssetError;
 pub use export::{
     ExportEvent, ExportFailure, ExportOptions, ExportProgress, ExportReport, SkipReason,
     SkippedAsset, WrittenFile, export_audio_package, export_bundle, sanitize_file_name,
+};
+pub use index::{
+    AssetIndex, AssetKinds, BundleContents, Coverage, IndexBuilder, IndexError, IndexFile,
+    IndexOptions, IndexPlan, IndexProgress, IndexReport, IndexRun, IndexStatus, IndexedAsset,
+    IndexedPackage, SearchHit, SearchResults,
 };
 pub use manifest::{AssetListing, Manifest, Package, PackageKind, category_of};
 pub use platform::Platform;
