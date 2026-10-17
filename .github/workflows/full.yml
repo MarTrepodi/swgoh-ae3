@@ -1,0 +1,187 @@
+name: Full CI
+
+# Every platform, release builds, binary size budgets and the texture
+# oracle. Too slow for every pull request, so it runs:
+#   - nightly, when main has changed since the last successful run;
+#   - on release-plz's release pull request, so nothing ships untested;
+#   - on any pull request labelled full-ci;
+#   - on demand (workflow_dispatch).
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  AE3_FIXTURES: ${{ github.workspace }}/fixtures
+  AE3_REQUIRE_FIXTURES: "1"
+
+jobs:
+  # Decides whether the expensive jobs run. When they are skipped they still
+  # satisfy required status checks, so ordinary pull requests are not held.
+  gate:
+    name: Full CI gate
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          run=false
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) run=true ;;
+            pull_request)
+              if [[ "$HEAD_REF" == release-plz-* || " $LABELS " == *" full-ci "* ]]; then
+                run=true
+              fi
+              ;;
+            schedule)
+              last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow full.yml --branch main \
+                --status success --limit 20 --json headSha,event \
+                --jq '[.[] | select(.event == "schedule" or .event == "workflow_dispatch")][0].headSha // ""')
+              if [[ "$last" != "$GITHUB_SHA" ]]; then run=true; fi
+              echo "Last successful full run: ${last:-none}; main is at $GITHUB_SHA"
+              ;;
+          esac
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Run full CI: $run"
+
+  build:
+    name: Full (${{ matrix.name }})
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # gui_budget is ae3-gui's size budget in MiB. It differs by platform:
+        # macOS draws through system frameworks, while Windows and Linux link
+        # their own accessibility, windowing and clipboard stacks (Linux:
+        # AT-SPI over zbus, X11, Wayland and client-side decorations), and
+        # x86_64 code is larger than aarch64. First CI measurements:
+        # macOS 5.9, Windows 9.6, Linux aarch64 9.6, Linux x86_64 12.8 MiB.
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            gui_budget: 11
+          - name: macOS arm64
+            os: macos-latest
+            gui_budget: 8
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            gui_budget: 14
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            gui_budget: 11
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Keep LF endings so scripts/fetch-fixtures.sh runs under Git Bash.
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # ae3-gui plays sounds through cpal, which links ALSA on Linux and
+      # needs its headers (alsa.pc) to build.
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - name: Cache fixtures
+        uses: actions/cache@v5
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        shell: bash
+        run: bash scripts/fetch-fixtures.sh
+
+      # Bash, so the first command's failure is not lost on Windows, where
+      # PowerShell would only report the last one.
+      - name: Clippy
+        shell: bash
+        run: |
+          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
+          cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
+
+      - name: Test
+        shell: bash
+        run: |
+          cargo test --workspace --exclude ae3-oracle --all-features --locked
+          cargo test -p ae3-oracle --locked
+
+      - name: Release build
+        run: cargo build --workspace --exclude ae3-oracle --release --locked
+
+      # Budgets are in MiB and apply to the default-feature release binaries:
+      # 5 for ae3 everywhere, and matrix.gui_budget for ae3-gui.
+      - name: Binary size budget
+        shell: bash
+        run: |
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          echo "| Binary | Bytes | Budget |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | ---: | ---: |" >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          check() {
+            local bin="$1" budget=$(( $2 * 1024 * 1024 )) size
+            size=$(wc -c < "target/release/$bin$ext" | tr -d '[:space:]')
+            echo "$bin$ext: $size bytes (budget $budget)"
+            echo "| $bin$ext | $size | $budget |" >> "$GITHUB_STEP_SUMMARY"
+            if (( size > budget )); then
+              echo "::error::$bin$ext is $size bytes, over its $2 MiB budget"
+              status=1
+            fi
+          }
+          check ae3 5
+          check ae3-gui ${{ matrix.gui_budget }}
+          exit $status
+
+  # The differential oracle: every fixture texture decoded by ae3-core and
+  # by unity-rs-core must agree. unity-rs-core links C zstd, which is why it
+  # lives in this job and never in a shipped binary.
+  oracle:
+    name: Full (texture oracle)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache fixtures
+        uses: actions/cache@v5
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        run: bash scripts/fetch-fixtures.sh
+
+      - name: Shipped binaries do not depend on the oracle
+        run: |
+          for dep in unity-rs-core zstd-sys; do
+            if cargo tree --locked -p ae3 -p ae3-gui --all-features --target all -e normal,build -i "$dep" >/dev/null 2>&1; then
+              echo "::error::ae3 or ae3-gui depends on $dep"
+              exit 1
+            fi
+          done
+
+      - name: Clippy
+        run: cargo clippy -p ae3-oracle --all-targets --all-features --locked -- -D warnings
+
+      - name: Oracle
+        run: cargo test -p ae3-oracle --all-features --locked -- --include-ignored --nocapture
