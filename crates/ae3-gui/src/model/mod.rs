@@ -13,6 +13,7 @@ pub mod lru;
 pub mod mesh;
 pub mod preview;
 pub mod selection;
+pub mod startup;
 pub mod table;
 pub mod update;
 pub mod viewer;
@@ -27,6 +28,7 @@ use self::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use self::jobs::{Job, ProgressClock, format_duration};
 use self::preview::Preview;
 use self::selection::{ClickModifiers, RowSelection};
+use self::startup::Startup;
 use self::table::{PackageRow, SearchMatches, Sort, TypeFilter, format_bytes, visible_rows};
 use self::update::UpdateCheck;
 
@@ -158,6 +160,8 @@ pub struct Model {
     pub index_job: Job<IndexProgressView>,
     pub coverage: Option<Coverage>,
     pub update: UpdateCheck,
+    /// The Manifest load the window starts by itself.
+    pub startup: Startup,
     pub extract_job: Job<ExtractProgress>,
     pub extract_label: String,
     pub summary: Option<ExtractSummary>,

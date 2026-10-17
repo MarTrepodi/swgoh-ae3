@@ -88,6 +88,10 @@ pub fn manifest(app: &mut Ae3App, ui: &mut egui::Ui) {
                 store.platform(),
                 store.location().environment,
             ));
+            if app.model.startup.is_pending() {
+                // No spinner: it would repaint the window until GitHub answers.
+                ui.label(RichText::new("· looking for a newer Asset Version").weak());
+            }
         }
         if let Some(newer) = app.model.update.newer() {
             ui.separator();

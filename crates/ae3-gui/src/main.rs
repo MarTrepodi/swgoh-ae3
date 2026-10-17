@@ -48,13 +48,9 @@ fn main() -> eframe::Result {
         "AE3",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(app::Ae3App::new(
-                &cc.egui_ctx,
-                config,
-                file,
-                path,
-                notice,
-            )))
+            let mut app = app::Ae3App::new(&cc.egui_ctx, config, file, path, notice);
+            app.start();
+            Ok(Box::new(app))
         }),
     )
 }

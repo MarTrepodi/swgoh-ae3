@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use ae3_core::ae3_image::{self, RgbaImage};
 use ae3_core::http::UreqTransport;
+use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
-    ExportOptions, IndexBuilder, IndexProgress, LoadedBundle, PackageCache, PackageKind,
-    PackageStore, Platform, Resolver, SoundInfo, Value,
+    Environment, ExportOptions, IndexBuilder, IndexProgress, LoadedBundle, PackageCache,
+    PackageKind, PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
 };
 use eframe::egui::ColorImage;
 
@@ -116,6 +117,25 @@ pub struct DetailImage {
     pub height: u32,
 }
 
+/// The latest Asset Version, as the startup load found it.
+pub enum Latest {
+    /// Not newer than the cached Manifest the startup opened, so only
+    /// where it is served from.
+    Located(CdnLocation),
+    /// Newer (or nothing was cached): a store over its Manifest.
+    Opened(Store),
+}
+
+impl Latest {
+    #[must_use]
+    pub fn asset_version(&self) -> AssetVersion {
+        match self {
+            Self::Located(location) => location.asset_version,
+            Self::Opened(store) => store.location().asset_version,
+        }
+    }
+}
+
 pub struct IndexOutcome {
     pub index: Arc<AssetIndex>,
     pub cancelled: bool,
@@ -131,6 +151,17 @@ pub enum Msg {
     ManifestLoaded {
         generation: Generation,
         result: Result<Store, String>,
+    },
+    /// The startup load opened the last Asset Version shown from the
+    /// download cache, or found none there.
+    StartupCached {
+        generation: Generation,
+        store: Option<Store>,
+    },
+    /// The startup load resolved the latest Asset Version.
+    StartupLatest {
+        generation: Generation,
+        result: Result<Latest, String>,
     },
     UpdateChecked {
         latest: Option<AssetVersion>,
@@ -213,6 +244,78 @@ pub fn load_manifest(
     .resolve(explicit)
     .map_err(|e| e.to_string())?;
     Store::open(cache, location, platform).map_err(|e| e.to_string())
+}
+
+/// Where [`PackageCache`] keeps Manifests under its root:
+/// `manifests/{Environment}/{Platform}/{Asset Version}.data`.
+const CACHED_MANIFESTS_DIR: &str = "manifests";
+
+/// Opens `version`'s Manifest from the download cache without touching the
+/// network, or `None` when it is not cached. The Environment is the one the
+/// cached copy was filed under (the most recent, if several), and the base
+/// URL is built from the one CDN host, as the ADR-0005 fallback does; the
+/// startup load replaces it with the resolved one when that differs.
+pub fn open_cached(
+    services: &Services,
+    platform: Platform,
+    version: AssetVersion,
+) -> Option<Store> {
+    let cache = services.cache().ok()?;
+    let file = format!("{version}.data");
+    let environment = std::fs::read_dir(cache.root().join(CACHED_MANIFESTS_DIR))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let environment = Environment::new(entry.file_name().to_str()?)?;
+            let path = entry.path().join(platform.name()).join(&file);
+            let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+            Some((modified, environment))
+        })
+        .max_by_key(|(modified, _)| *modified)?
+        .1;
+    let location = CdnLocation {
+        asset_version: version,
+        base_url: format!("{CDN_ROOT}{environment}/"),
+        environment,
+        source: VersionSource::Explicit,
+    };
+    // The copy is on disk, so this reads it (a corrupt copy is fetched again).
+    Store::open(cache, location, platform).ok()
+}
+
+/// The startup load: opens `last_shown` from the cache and reports it at
+/// once, then resolves the latest Asset Version and opens its Manifest when
+/// it is newer than what was reported.
+pub fn startup(
+    services: &Services,
+    platform: Platform,
+    last_shown: Option<AssetVersion>,
+    generation: Generation,
+    outbox: &Mailbox,
+) {
+    let cached = last_shown.and_then(|v| open_cached(services, platform, v));
+    let shown = cached.as_ref().map(|s| s.location().asset_version);
+    outbox.send(Msg::StartupCached {
+        generation,
+        store: cached,
+    });
+    let result = services.cache().and_then(|cache| {
+        let location = Resolver::new(
+            cache.downloader().transport(),
+            platform,
+            services.config.effective_cache_dir(),
+        )
+        .resolve(None)
+        .map_err(|e| e.to_string())?;
+        if shown.is_some_and(|v| v >= location.asset_version) {
+            Ok(Latest::Located(location))
+        } else {
+            Store::open(cache, location, platform)
+                .map(Latest::Opened)
+                .map_err(|e| e.to_string())
+        }
+    });
+    outbox.send(Msg::StartupLatest { generation, result });
 }
 
 /// The latest Asset Version, or `None` when it cannot be found right now.
@@ -718,6 +821,50 @@ mod tests {
         };
         assert!(kinds.contains(AssetKind::Texture));
         assert!(assets.iter().any(|a| a.kind == AssetKind::Texture));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The startup load against the real CDN: with an empty cache it opens
+    /// the latest Manifest; on the next start that Manifest comes from the
+    /// cache and the latest is only located.
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_startup_uses_the_cache_on_the_second_run() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-live-start-{}", std::process::id()));
+        let services = Services::new(Config {
+            cache_dir: Some(dir.clone()),
+            ..Config::default()
+        });
+        let run = |last_shown| {
+            let (outbox, rx) = outbox();
+            startup(&services, Platform::Windows, last_shown, 7, &outbox);
+            let Ok(Msg::StartupCached {
+                generation: 7,
+                store,
+            }) = rx.try_recv()
+            else {
+                panic!("no cached message first");
+            };
+            let Ok(Msg::StartupLatest {
+                generation: 7,
+                result,
+            }) = rx.try_recv()
+            else {
+                panic!("no latest message");
+            };
+            (store, result.unwrap())
+        };
+        let (cached, latest) = run(Some(AssetVersion(100_054)));
+        assert!(cached.is_none(), "the cache starts empty");
+        let Latest::Opened(store) = latest else {
+            panic!("the latest Manifest is opened");
+        };
+        let version = store.location().asset_version;
+        let (cached, latest) = run(Some(version));
+        let cached = cached.expect("the Manifest is cached now");
+        assert_eq!(cached.manifest(), store.manifest());
+        assert_eq!(cached.location().base_url, store.location().base_url);
+        assert!(matches!(latest, Latest::Located(l) if l.asset_version == version));
         let _ = std::fs::remove_dir_all(dir);
     }
 

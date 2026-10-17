@@ -18,6 +18,7 @@ use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
 use crate::model::mesh::OrbitCamera;
+use crate::model::startup::LatestDecision;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::{Channels, ViewTransform};
 use crate::tasks::{self, DetailContent, Mailbox, Msg, Opened, Services, Store};
@@ -86,6 +87,9 @@ pub struct Ae3App {
     index_pause: Arc<AtomicBool>,
     index_cancel: Arc<AtomicBool>,
     index_thread: Option<JoinHandle<()>>,
+    /// Whether a loaded Manifest starts an Asset Index build; tests turn
+    /// it off to stay offline.
+    index_on_load: bool,
     /// The query a background search is running for, and whether another
     /// is wanted after it.
     search_in_flight: bool,
@@ -142,6 +146,7 @@ impl Ae3App {
             index_pause: Arc::new(AtomicBool::new(false)),
             index_cancel: Arc::new(AtomicBool::new(false)),
             index_thread: None,
+            index_on_load: true,
             search_in_flight: false,
             search_wanted: false,
             preview_generation: Arc::new(AtomicU64::new(0)),
@@ -162,13 +167,148 @@ impl Ae3App {
         }
     }
 
+    /// Starts what the window does by itself: loading the latest Manifest
+    /// and, unless turned off, looking for a newer AE3 release. Kept out of
+    /// [`Ae3App::new`] so tests build an app that stays offline.
+    pub fn start(&mut self) {
+        self.start_up();
+    }
+
     // ---- Manifest -------------------------------------------------------
+
+    /// The startup load: the last Asset Version shown, from the cache, at
+    /// once; then the latest (ADR-0005). The UI never waits for either.
+    fn start_up(&mut self) {
+        if self.model.manifest_job.is_active() {
+            return;
+        }
+        let generation = self.begin_startup();
+        let last_shown = self.config_file.gui.last_asset_version;
+        let services = Arc::clone(&self.services);
+        let platform = self.config.platform;
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-startup", move || {
+            tasks::startup(&services, platform, last_shown, generation, &outbox);
+        });
+    }
+
+    /// Starts the startup load's Manifest job; its messages carry the
+    /// generation returned.
+    fn begin_startup(&mut self) -> u64 {
+        let generation = self.model.manifest_job.start(Instant::now());
+        self.model.startup.begin(generation);
+        self.model.manifest_job.update(
+            generation,
+            match self.config_file.gui.last_asset_version {
+                Some(v) => format!("Opening Asset Version {v}…"),
+                None => "Finding the latest Asset Version…".to_owned(),
+            },
+        );
+        generation
+    }
+
+    /// The startup load's cached Manifest arrived (or there was none).
+    fn startup_cached(&mut self, generation: u64, store: Option<Store>) {
+        if !self.model.startup.is_for(generation) {
+            return;
+        }
+        match store {
+            Some(store) => {
+                if self.model.manifest_job.finish(generation, Ok(false)) {
+                    self.last_load_error = None;
+                    self.manifest_loaded(store);
+                }
+            }
+            None => {
+                self.model
+                    .manifest_job
+                    .update(generation, "Finding the latest Asset Version…".to_owned());
+            }
+        }
+    }
+
+    /// The startup load resolved the latest Asset Version.
+    fn startup_latest(&mut self, generation: u64, result: Result<tasks::Latest, String>) {
+        let job = &self.model.manifest_job;
+        if job.is_active() && job.generation() == generation {
+            // Nothing was cached: this is the window's first Manifest.
+            self.model.startup.abandon();
+            let outcome = result.as_ref().map(|_| false).map_err(Clone::clone);
+            if self.model.manifest_job.finish(generation, outcome) {
+                match result {
+                    Ok(tasks::Latest::Opened(store)) => {
+                        self.last_load_error = None;
+                        self.manifest_loaded(store);
+                    }
+                    Ok(tasks::Latest::Located(_)) => {}
+                    Err(e) => self.last_load_error = Some(e),
+                }
+            }
+            return;
+        }
+        let shown = self.model.asset_version();
+        let latest = match result {
+            Ok(latest) => latest,
+            Err(e) => {
+                if self.model.startup.is_for(generation) {
+                    self.model.startup.abandon();
+                    if let Some(v) = shown {
+                        self.model.notice = Some(format!(
+                            "Showing Asset Version {v} from the cache; the latest could not be found: {e}"
+                        ));
+                    }
+                }
+                return;
+            }
+        };
+        let version = latest.asset_version();
+        let extracting = self.model.extract_job.is_active();
+        match (
+            self.model
+                .startup
+                .decide(generation, shown, version, extracting),
+            latest,
+        ) {
+            (LatestDecision::Show, tasks::Latest::Opened(store)) => self.manifest_loaded(store),
+            (LatestDecision::Keep, tasks::Latest::Located(location)) => {
+                self.adopt_location(location);
+            }
+            (LatestDecision::Offer, _) => self.model.update.finished(Some(version)),
+            _ => {}
+        }
+    }
+
+    /// The cached Manifest's base URL was built rather than resolved; use
+    /// the resolved one if it differs. The Manifest itself is unchanged.
+    fn adopt_location(&mut self, location: ae3_core::CdnLocation) {
+        let Some(store) = &self.store else { return };
+        let current = store.location();
+        if current.asset_version != location.asset_version
+            || (current.base_url == location.base_url
+                && current.environment == location.environment)
+        {
+            return;
+        }
+        let store = Store::new(
+            Arc::clone(store.cache()),
+            location,
+            store.platform(),
+            store.shared_manifest(),
+        );
+        self.store = Some(store);
+        // The running build probes through the old location.
+        if self.model.index_job.is_active() {
+            self.stop_index();
+            self.start_index();
+        }
+    }
 
     /// Resolves and loads a Manifest: the latest when `version` is `None`.
     pub fn load_manifest(&mut self, version: Option<AssetVersion>) {
         if self.model.manifest_job.is_active() {
             return;
         }
+        self.model.startup.abandon();
         let generation = self.model.manifest_job.start(Instant::now());
         self.model.manifest_job.update(
             generation,
@@ -200,7 +340,9 @@ impl Ae3App {
             self.config_dirty_since = Some(Instant::now());
         }
         self.store = Some(store);
-        self.start_index();
+        if self.index_on_load {
+            self.start_index();
+        }
     }
 
     fn check_for_update(&mut self, now: Instant) {
@@ -576,6 +718,8 @@ impl Ae3App {
             SettingChange::Platform(v) => {
                 self.config.platform = v;
                 s.platform = Some(v);
+                // The startup load is for the Platform it started with.
+                self.model.startup.abandon();
             }
             SettingChange::ImageFormat(v) => {
                 self.config.image_format = v;
@@ -644,6 +788,8 @@ impl Ae3App {
                     }
                 }
             }
+            Msg::StartupCached { generation, store } => self.startup_cached(generation, store),
+            Msg::StartupLatest { generation, result } => self.startup_latest(generation, result),
             Msg::UpdateChecked { latest } => self.model.update.finished(latest),
             Msg::IndexSnapshot { generation, index } => {
                 if generation == self.model.index_job.generation() {
@@ -966,6 +1112,240 @@ mod tests {
             }
             frame(ctx, app);
         }
+    }
+
+    /// A download cache in the temporary directory, removed on drop.
+    struct TempCache(PathBuf);
+
+    impl TempCache {
+        /// With the fixture Manifest filed as Asset Version 100054 of
+        /// Windows in the PROD Environment, as `PackageCache` files it.
+        fn with_manifest(name: &str, manifest: Option<&Path>) -> Self {
+            let dir = std::env::temp_dir().join(format!("ae3-gui-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            if let Some(manifest) = manifest {
+                let target = dir.join("manifests/PROD/Windows");
+                std::fs::create_dir_all(&target).unwrap();
+                std::fs::copy(manifest, target.join("100054.data")).unwrap();
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempCache {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// An offline app over `cache` that last showed `last_shown`, with its
+    /// startup load begun; returns the load's generation.
+    fn starting_app(
+        ctx: &egui::Context,
+        cache: &TempCache,
+        last_shown: Option<AssetVersion>,
+    ) -> (Ae3App, u64) {
+        let config = Config {
+            cache_dir: Some(cache.0.clone()),
+            ..Config::default()
+        };
+        let mut file = ConfigFile::default();
+        file.gui.last_asset_version = last_shown;
+        let mut app = Ae3App::new(ctx, config, file, None, None);
+        app.index_on_load = false;
+        let generation = app.begin_startup();
+        (app, generation)
+    }
+
+    /// A store over the fixture Manifest relabelled as Asset Version
+    /// `version`, as if the CDN had published it.
+    fn published(app: &Ae3App, version: u64) -> Store {
+        let cached = app.store.as_ref().expect("a cached Manifest is shown");
+        let mut manifest = cached.manifest().clone();
+        manifest.asset_version = AssetVersion(version);
+        let location = ae3_core::CdnLocation {
+            asset_version: AssetVersion(version),
+            ..cached.location().clone()
+        };
+        Store::new(
+            Arc::clone(cached.cache()),
+            location,
+            Platform::Windows,
+            manifest,
+        )
+    }
+
+    #[test]
+    fn startup_opens_the_cached_manifest_then_switches_to_a_newer_one() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-newer", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        assert!(app.model.manifest_job.is_active());
+
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054))
+            .expect("the cached Manifest opens without the network");
+        assert_eq!(cached.location().environment.as_str(), "PROD");
+        assert!(
+            tasks::open_cached(&app.services, Platform::Android, AssetVersion(100_054)).is_none()
+        );
+        assert!(
+            tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_053)).is_none()
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: Some(cached),
+            },
+        );
+        assert!(!app.model.manifest_job.is_active(), "usable at once");
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert!(app.model.startup.is_pending());
+        frame(&ctx, &mut app);
+
+        let newer = published(&app, 100_055);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Opened(newer)),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_055)));
+        assert_eq!(app.model.version_text, "100055");
+        assert!(!app.model.startup.is_pending());
+        assert_eq!(app.model.update.newer(), None);
+        assert_eq!(
+            app.config_file.gui.last_asset_version,
+            Some(AssetVersion(100_055)),
+            "remembered for the next start"
+        );
+        frame(&ctx, &mut app);
+    }
+
+    #[test]
+    fn startup_only_offers_a_newer_version_once_the_user_moved_on() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-offer", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        // The user picks another Platform before the latest arrives.
+        app.change_setting(SettingChange::Platform(Platform::Android));
+        let newer = published(&app, 100_055);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Opened(newer)),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert_eq!(app.model.update.newer(), Some(AssetVersion(100_055)));
+    }
+
+    #[test]
+    fn startup_keeps_the_cached_manifest_when_offline() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-offline", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Err("no network".into()),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert!(!app.model.startup.is_pending());
+        assert!(app.last_load_error.is_none());
+        assert!(
+            app.model
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no network")),
+            "{:?}",
+            app.model.notice
+        );
+
+        // The same version resolved: the resolved location is adopted and
+        // nothing is reloaded.
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        app.model.click_row(0, ClickModifiers::default());
+        let location = ae3_core::CdnLocation {
+            base_url: "https://mirror.invalid/PROD/".into(),
+            ..app.store.as_ref().unwrap().location().clone()
+        };
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Located(location)),
+            },
+        );
+        assert_eq!(app.model.selection.len(), 1, "the table was not reset");
+        assert_eq!(
+            app.store.as_ref().unwrap().location().base_url,
+            "https://mirror.invalid/PROD/"
+        );
+    }
+
+    #[test]
+    fn startup_without_a_cached_manifest_waits_for_the_latest() {
+        let ctx = egui::Context::default();
+        let cache = TempCache::with_manifest("startup-empty", None);
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        assert!(
+            tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054)).is_none()
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: None,
+            },
+        );
+        assert!(app.model.manifest_job.is_active());
+        assert_eq!(
+            app.model.manifest_job.progress(),
+            "Finding the latest Asset Version…"
+        );
+        frame(&ctx, &mut app);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Err("offline".into()),
+            },
+        );
+        assert!(!app.model.manifest_job.is_active());
+        assert_eq!(app.last_load_error.as_deref(), Some("offline"));
+        assert!(!app.model.startup.is_pending());
     }
 
     /// The whole window renders headless: the Manifest table, a fixture
