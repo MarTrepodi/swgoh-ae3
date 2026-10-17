@@ -119,6 +119,8 @@ pub struct Ae3App {
     extract_cancel: Option<Arc<AtomicBool>>,
     pub diff_store: Option<Store>,
     checker: Option<TextureHandle>,
+    /// The application icon, for the About window; loaded on first use.
+    about_icon: Option<TextureHandle>,
     max_texture_side: u32,
     pub last_load_error: Option<String>,
 }
@@ -197,6 +199,7 @@ impl Ae3App {
             extract_cancel: None,
             diff_store: None,
             checker: None,
+            about_icon: None,
             max_texture_side: 2048,
             last_load_error: None,
         }
@@ -357,7 +360,46 @@ impl Ae3App {
         });
     }
 
-    /// Hides the "AE3 vX available" notice until a later release.
+    /// The About window's "Check for updates": asks GitHub now, on a thread
+    /// of its own, regardless of `check-for-updates` and the daily limit.
+    pub fn check_for_updates_now(&mut self) {
+        if self.model.manual_check == crate::model::release::ManualCheck::Checking {
+            return;
+        }
+        self.model.manual_check = crate::model::release::ManualCheck::Checking;
+        let path = self.release_state_path();
+        let transport = Arc::clone(self.services.transport());
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-release-check-now", move || {
+            let (state, result) =
+                tasks::check_release_now(&transport, path.as_deref(), tasks::unix_now());
+            outbox.send(Msg::ManualReleaseChecked { state, result });
+        });
+    }
+
+    /// The application icon as a texture, for the About window.
+    pub fn about_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.about_icon.is_none() {
+            self.about_icon = crate::icon::color_image()
+                .map(|image| ctx.load_texture("app-icon", image, TextureOptions::LINEAR));
+        }
+        self.about_icon.clone()
+    }
+
+    /// The About window's check came back.
+    fn manual_release_checked(
+        &mut self,
+        state: ReleaseState,
+        result: &Result<Option<crate::model::release::Release>, String>,
+    ) {
+        self.model.manual_check = crate::model::release::ManualCheck::from_result(
+            result,
+            crate::model::release::ReleaseVersion::current(),
+        );
+        self.model.release = Some(state);
+    }
+
+    /// Hides the "swgoh-ae3 vX available" notice until a later release.
     pub fn dismiss_release(&mut self) {
         let path = self.release_state_path();
         let Some(state) = &mut self.model.release else {
@@ -1130,6 +1172,9 @@ impl Ae3App {
                 }
             }
             Msg::ReleaseChecked(state) => self.model.release = Some(state),
+            Msg::ManualReleaseChecked { state, result } => {
+                self.manual_release_checked(state, &result);
+            }
             Msg::NamesProgress(step) => self.model.names_state.progress(step),
             Msg::NamesLoaded { index, state } => self.model.set_names(index, state),
             Msg::ConfigSaved(result) => {
@@ -1811,7 +1856,7 @@ mod tests {
             ..Config::default()
         };
         let mut app = Ae3App::new(&ctx, config, ConfigFile::default(), None, None);
-        let notice = "AE3 v99.0.0 available";
+        let notice = "swgoh-ae3 v99.0.0 available";
         assert!(!painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
         let mut state = ReleaseState::default();
         state.checked(

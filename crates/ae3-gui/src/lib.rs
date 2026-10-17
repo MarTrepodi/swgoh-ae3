@@ -16,12 +16,17 @@
 
 pub mod app;
 mod highlight;
+pub mod icon;
 pub mod model;
 pub mod output;
 pub mod smoke;
 pub mod tasks;
 pub mod ui;
 pub mod worker;
+
+/// The name the application shows: window title, About window, notices.
+/// The executables keep their `ae3` and `ae3-gui` names.
+pub const APP_NAME: &str = "swgoh-ae3";
 
 use std::path::PathBuf;
 
@@ -67,12 +72,13 @@ impl Startup {
 pub fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("AE3")
+            .with_title(APP_NAME)
             // Wayland app_id and X11 WM_CLASS; matches StartupWMClass in
             // packaging/linux/ae3-gui.desktop so docks group the window.
             .with_app_id("ae3-gui")
             .with_inner_size([1180.0, 780.0])
-            .with_min_inner_size([720.0, 480.0]),
+            .with_min_inner_size([720.0, 480.0])
+            .with_icon(std::sync::Arc::new(icon::window_icon())),
         // The 3D Mesh view depth-tests against the window's framebuffer.
         depth_buffer: 24,
         ..Default::default()
@@ -88,7 +94,7 @@ pub fn run() -> eframe::Result {
         notice,
     } = Startup::load();
     eframe::run_native(
-        "AE3",
+        APP_NAME,
         native_options(),
         Box::new(move |cc| {
             let mut app = Ae3App::new(&cc.egui_ctx, config, file, path, notice);

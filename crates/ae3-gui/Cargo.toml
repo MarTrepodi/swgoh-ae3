@@ -20,6 +20,8 @@ eframe = { workspace = true, features = [
 ] }
 # Only the table widget; no image loaders, no mime guessing.
 egui_extras = { version = "0.37", default-features = false }
+# Decodes the embedded application icon; the same png that ae3-image uses.
+png = { version = "0.18.1", default-features = false }
 # Native folder picker. The xdg-portal backend talks D-Bus on Linux, so no
 # GTK is linked; macOS and Windows use the system dialogs.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
@@ -45,6 +47,12 @@ winit = { version = "0.30", default-features = false, features = [
 # The workspace lints, except that unsafe code is denied rather than
 # forbidden: the 3D Mesh view (src/ui/mesh.rs) calls OpenGL through glow,
 # whose bindings are all `unsafe`, and allows it in that module alone.
+# Windows only: embeds the icon and version info in ae3-gui.exe (build.rs).
+# Build scripts run on the build machine, which is Windows for the Windows
+# release; no other build compiles it.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1.34", default-features = false }
+
 [lints.rust]
 unsafe_code = "deny"
 
@@ -69,6 +77,7 @@ include = [
     "../ae3-audio/THIRD-PARTY-NOTICES.md",
     "../../THIRD-PARTY-LICENSES.md",
     "../../packaging/linux/ae3-gui.desktop",
+    "../../packaging/icons/swgoh-ae3.png",
 ]
 
 # The Linux release runners install ALSA's headers for cpal (see rodio above).

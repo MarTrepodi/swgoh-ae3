@@ -1,4 +1,4 @@
-//! The "AE3 vX available" notice (design Q33). At most once a day the GUI
+//! The "swgoh-ae3 vX available" notice (design Q33). At most once a day the GUI
 //! asks GitHub Releases for the newest release of the repository in
 //! Cargo.toml and, when it is newer than the running build, links to it.
 //! It never downloads or installs anything, a failed check (a 404 while
@@ -127,6 +127,47 @@ pub fn latest_release_api(repository: &str) -> Option<String> {
     };
     (valid(owner) && valid(repo))
         .then(|| format!("https://api.github.com/repos/{owner}/{repo}/releases/latest"))
+}
+
+/// What the About window's "Check for updates" button last found. Unlike
+/// the daily check it ignores the once-a-day limit and says what happened,
+/// including when nothing has been published or GitHub could not be asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ManualCheck {
+    #[default]
+    Idle,
+    Checking,
+    /// The running build is the newest release (or newer).
+    UpToDate,
+    Newer {
+        version: ReleaseVersion,
+        url: String,
+    },
+    /// The repository has no published release (GitHub answered 404).
+    NotPublished,
+    Failed(String),
+}
+
+impl ManualCheck {
+    /// The outcome of asking GitHub, judged against the `current` build.
+    #[must_use]
+    pub fn from_result(
+        result: &Result<Option<Release>, String>,
+        current: Option<ReleaseVersion>,
+    ) -> Self {
+        match result {
+            Err(e) => Self::Failed(e.clone()),
+            Ok(None) => Self::NotPublished,
+            Ok(Some(release)) => match release.version() {
+                Some(version) if current.is_none_or(|c| version > c) => Self::Newer {
+                    version,
+                    url: release.url.clone(),
+                },
+                Some(_) => Self::UpToDate,
+                None => Self::Failed(format!("unrecognised release tag {}", release.tag)),
+            },
+        }
+    }
 }
 
 /// A published release.
@@ -359,5 +400,38 @@ mod tests {
         assert_eq!(ReleaseState::parse(&state.to_json()), state);
         assert_eq!(ReleaseState::parse("not json"), ReleaseState::default());
         assert_eq!(ReleaseState::parse("{}"), ReleaseState::default());
+    }
+
+    #[test]
+    fn a_manual_check_says_what_it_found() {
+        let current = Some(v(1, 2, 0));
+        let found = |tag: &str| Ok(Some(release(tag)));
+        assert_eq!(
+            ManualCheck::from_result(&found("v1.3.0"), current),
+            ManualCheck::Newer {
+                version: v(1, 3, 0),
+                url: release("v1.3.0").url,
+            }
+        );
+        assert_eq!(
+            ManualCheck::from_result(&found("v1.2.0"), current),
+            ManualCheck::UpToDate
+        );
+        assert_eq!(
+            ManualCheck::from_result(&found("v1.1.9"), current),
+            ManualCheck::UpToDate
+        );
+        assert_eq!(
+            ManualCheck::from_result(&Ok(None), current),
+            ManualCheck::NotPublished
+        );
+        assert_eq!(
+            ManualCheck::from_result(&Err("offline".into()), current),
+            ManualCheck::Failed("offline".into())
+        );
+        assert!(matches!(
+            ManualCheck::from_result(&found("nightly"), current),
+            ManualCheck::Failed(_)
+        ));
     }
 }

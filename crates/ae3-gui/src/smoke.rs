@@ -147,7 +147,7 @@ pub fn run(report_path: &Path) -> i32 {
     let shared = Arc::clone(&report);
     let path = report_path.to_owned();
     let result = eframe::run_native(
-        "AE3",
+        crate::APP_NAME,
         crate::native_options(),
         Box::new(move |cc| {
             *context.lock().unwrap_or_else(PoisonError::into_inner) = Some(cc.egui_ctx.clone());

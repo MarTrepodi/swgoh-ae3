@@ -3,6 +3,7 @@
 //! (with the preview pane on the right) or the Diff tab, and the
 //! extraction bar.
 
+mod about;
 mod detail;
 mod diff;
 mod extract;
@@ -107,7 +108,7 @@ pub fn match_color(ui: &egui::Ui) -> Color32 {
     ui.visuals().selection.stroke.color
 }
 
-/// "AE3 vX available", linking to the release page, with a dismiss button.
+/// "swgoh-ae3 vX available", linking to the release page, with a dismiss button.
 /// AE3 never updates itself.
 fn release_notice(app: &mut Ae3App, ui: &mut egui::Ui) {
     let Some((version, url)) = app.model.release.as_ref().and_then(|state| {
@@ -118,7 +119,7 @@ fn release_notice(app: &mut Ae3App, ui: &mut egui::Ui) {
         return;
     };
     ui.separator();
-    ui.hyperlink_to(format!("AE3 v{version} available"), url)
+    ui.hyperlink_to(format!("{} v{version} available", crate::APP_NAME), url)
         .on_hover_text("Open the release page to download it");
     if ui.small_button("×").on_hover_text("Dismiss").clicked() {
         app.dismiss_release();
@@ -153,6 +154,9 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
                     app.model.notice = None;
                 }
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                about::button(app, ui);
+            });
         });
         ui.separator();
         match app.model.tab {
@@ -172,6 +176,7 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
         }
     });
     detail::window(app, ui.ctx());
+    about::window(app, ui.ctx());
 }
 
 #[cfg(test)]

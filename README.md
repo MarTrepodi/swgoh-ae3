@@ -1,6 +1,6 @@
 # swgoh-ae3
 
-**AE3** is the third-generation asset extractor for *Star Wars: Galaxy of Heroes*. It downloads, previews, searches and exports the game's published assets. It comes as a scriptable command-line tool and a desktop GUI, both small native binaries for Windows, macOS and Linux.
+**swgoh-ae3** (AE3 for short) is the third-generation asset extractor for *Star Wars: Galaxy of Heroes*. It downloads, previews, searches and exports the game's published assets. It comes as a scriptable command-line tool and a desktop GUI, both small native binaries for Windows, macOS and Linux.
 
 AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swgoh-ae2), swgoh-asset-extractor and Unity Bundle Extractor. It is a ground-up rewrite in Rust, with no .NET, Python or other runtime to install.
 
@@ -41,26 +41,26 @@ Pre-built binaries are published on the [Releases](https://github.com/swgoh-util
 | Platform | CLI archive (contains) | GUI archive (contains) |
 |---|---|---|
 | Windows x86_64 | `ae3-x86_64-pc-windows-msvc.zip` (`ae3.exe`) | `ae3-gui-x86_64-pc-windows-msvc.zip` (`ae3-gui.exe`) |
-| macOS (Apple silicon) | `ae3-aarch64-apple-darwin.tar.xz` (`ae3`) | `ae3-gui-aarch64-apple-darwin.zip` (`AE3.app`) |
-| Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
-| Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
+| macOS (Apple silicon) | `ae3-aarch64-apple-darwin.tar.xz` (`ae3`) | `ae3-gui-aarch64-apple-darwin.zip` (`swgoh-ae3.app`) |
+| Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
+| Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
 
 Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
 
 To add the GUI to a Linux desktop's application menu, run this from the extracted folder:
 
 ```bash
-install -Dm755 ae3-gui ~/.local/bin/ae3-gui && install -Dm644 ae3-gui.desktop ~/.local/share/applications/ae3-gui.desktop
+install -Dm755 ae3-gui ~/.local/bin/ae3-gui && install -Dm644 ae3-gui.desktop ~/.local/share/applications/ae3-gui.desktop && install -Dm644 swgoh-ae3.png ~/.local/share/icons/hicolor/256x256/apps/swgoh-ae3.png
 ```
 
 The `.desktop` file starts `ae3-gui` from your `PATH`, so `~/.local/bin` must be on it.
 
-Early releases are not code-signed. `AE3.app` is signed ad hoc only:
+Early releases are not code-signed. `swgoh-ae3.app` is signed ad hoc only:
 
-- **macOS:** the first launch of `AE3.app` or `ae3` is blocked. Open **System Settings** → **Privacy & Security** and choose **Open Anyway**, or clear the download quarantine first:
+- **macOS:** the first launch of `swgoh-ae3.app` or `ae3` is blocked. Open **System Settings** → **Privacy & Security** and choose **Open Anyway**, or clear the download quarantine first:
 
   ```bash
-  xattr -dr com.apple.quarantine AE3.app ae3
+  xattr -dr com.apple.quarantine swgoh-ae3.app ae3
   ```
 
 - **Windows:** SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
@@ -183,7 +183,9 @@ check-for-updates = true      # GUI only: look for a new AE3 release once a day
 
 Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_MESH_FORMAT`, `AE3_NO_CACHE`, `AE3_LANGUAGE` and `AE3_CHECK_FOR_UPDATES`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
 
-With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whether a newer AE3 has been published, without slowing the window down, and shows "AE3 vX available" with a link to the release page. It never downloads or installs anything. The CLI never checks.
+With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whether a newer AE3 has been published, without slowing the window down, and shows "swgoh-ae3 vX available" with a link to the release page. It never downloads or installs anything. The CLI never checks.
+
+The **About** button (top right of the window) shows the running version and has a **Check for updates** button, which asks GitHub straight away, whether or not `check-for-updates` is on.
 
 ## Building from source
 

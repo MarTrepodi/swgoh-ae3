@@ -1,6 +1,6 @@
 # cargo-dist custom job (local-artifacts-jobs in Cargo.toml). release.yml
 # calls it alongside its own builds; every `artifacts-*` upload ends up on
-# the GitHub Release. It ships the macOS GUI as AE3.app, which dist cannot
+# the GitHub Release. It ships the macOS GUI as swgoh-ae3.app, which dist cannot
 # build, so ae3-gui's dist targets leave out aarch64-apple-darwin.
 name: macOS app
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   bundle:
-    name: AE3.app (macOS arm64)
+    name: swgoh-ae3.app (macOS arm64)
     runs-on: macos-14
     env:
       PLAN: ${{ inputs.plan }}
@@ -39,7 +39,7 @@ jobs:
       - name: Build ae3-gui
         run: cargo build --profile dist --locked -p ae3-gui --target aarch64-apple-darwin
 
-      - name: Bundle AE3.app
+      - name: Bundle swgoh-ae3.app
         run: |
           version=$(jq -r '[.releases[] | select(.app_name == "ae3-gui")][0].app_version' <<< "$PLAN")
           packaging/macos/bundle-app.sh target/aarch64-apple-darwin/dist/ae3-gui "$version" target/distrib

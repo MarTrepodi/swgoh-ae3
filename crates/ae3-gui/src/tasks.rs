@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use ae3_core::ae3_audio::{self, Pcm};
 use ae3_core::ae3_image::{self, RgbaImage};
-use ae3_core::http::{Transport, UreqTransport};
+use ae3_core::http::{HttpError, Transport, UreqTransport};
 use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
@@ -29,7 +29,7 @@ use crate::model::mesh::MeshPreview;
 use crate::model::names::NamesState;
 use crate::model::playback::{SoundRef, unplayable_clip};
 use crate::model::preview::THUMBNAIL_PX;
-use crate::model::release::{self, ReleaseState};
+use crate::model::release::{self, Release, ReleaseState};
 use crate::model::table::SearchMatches;
 use crate::model::viewer::Channels;
 use crate::worker::Outbox;
@@ -258,8 +258,13 @@ pub enum Msg {
         result: Result<(Arc<Diff>, Store), String>,
     },
     ConfigSaved(Result<(), String>),
-    /// What the "AE3 vX available" check knows.
+    /// What the "swgoh-ae3 vX available" check knows.
     ReleaseChecked(ReleaseState),
+    /// The About window's check: the saved state and what GitHub said.
+    ManualReleaseChecked {
+        state: ReleaseState,
+        result: Result<Option<Release>, String>,
+    },
     /// What the Name Index load is doing.
     NamesProgress(String),
     /// The Name Index as loaded, and how it came to be.
@@ -805,7 +810,7 @@ fn short_version(version: &str) -> &str {
     version.split(':').next().unwrap_or(version)
 }
 
-/// The "AE3 vX available" check: reads the saved state at `path`, asks
+/// The "swgoh-ae3 vX available" check: reads the saved state at `path`, asks
 /// GitHub for the latest release when a day has passed since the last
 /// check, and saves the outcome. Failures (a 404 while the repository is
 /// not public, no network, an unwritable cache) are silent.
@@ -829,6 +834,43 @@ pub fn check_release<T: Transport + ?Sized>(
         save_release_state(&state, path);
     }
     state
+}
+
+/// Asks GitHub for the latest release. `Ok(None)` when the repository has
+/// none published (a 404, as while it is private or before a first
+/// release); `Err` when GitHub could not be asked or answered oddly.
+pub fn fetch_latest_release<T: Transport + ?Sized>(
+    transport: &T,
+) -> Result<Option<Release>, String> {
+    let url = release::latest_release_api(release::REPOSITORY)
+        .ok_or_else(|| format!("{} is not a GitHub repository", release::REPOSITORY))?;
+    match transport.get_text(&url) {
+        Ok(body) => release::parse_latest_release(&body, release::REPOSITORY)
+            .map(Some)
+            .ok_or_else(|| "GitHub's answer was not a release".to_owned()),
+        Err(HttpError::Status { status: 404, .. }) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// The About window's "Check for updates": asks GitHub now, whatever the
+/// once-a-day limit says, and records the answer like the daily check so
+/// the notice and the next daily check agree with it.
+pub fn check_release_now<T: Transport + ?Sized>(
+    transport: &T,
+    path: Option<&Path>,
+    now: u64,
+) -> (ReleaseState, Result<Option<Release>, String>) {
+    let mut state = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| ReleaseState::parse(&text))
+        .unwrap_or_default();
+    let result = fetch_latest_release(transport);
+    state.checked(now, result.clone().ok().flatten());
+    if let Some(path) = path {
+        save_release_state(&state, path);
+    }
+    (state, result)
 }
 
 /// Saves the release-check state, best effort: losing it only means one
@@ -1086,6 +1128,48 @@ mod tests {
 
     /// Answers GitHub's latest-release URL with `body`, or 404 without one,
     /// and counts the requests.
+    #[test]
+    fn check_now_ignores_the_daily_limit_and_says_what_it_found() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-release-now-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(ReleaseState::FILE);
+        let t0 = 1_800_000_000;
+
+        let missing = FakeGitHub {
+            body: None,
+            requests: std::cell::Cell::new(0),
+        };
+        let (_, result) = check_release_now(&missing, Some(&path), t0);
+        assert_eq!(result, Ok(None), "a 404 means nothing is published");
+        // A second click the same minute still asks.
+        let _ = check_release_now(&missing, Some(&path), t0 + 1);
+        assert_eq!(missing.requests.get(), 2);
+
+        let published = FakeGitHub {
+            body: Some(
+                r#"{"tag_name":"v99.0.0","html_url":"https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v99.0.0"}"#,
+            ),
+            requests: std::cell::Cell::new(0),
+        };
+        let (state, result) = check_release_now(&published, Some(&path), t0 + 2);
+        assert_eq!(result.unwrap().unwrap().tag, "v99.0.0");
+        assert_eq!(
+            state.latest.unwrap().tag,
+            "v99.0.0",
+            "the notice learns it too"
+        );
+        // The daily check now waits a day from this one.
+        check_release(&published, Some(&path), t0 + 3);
+        assert_eq!(published.requests.get(), 1);
+
+        let garbled = FakeGitHub {
+            body: Some("not json"),
+            requests: std::cell::Cell::new(0),
+        };
+        assert!(check_release_now(&garbled, None, t0).1.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     struct FakeGitHub {
         body: Option<&'static str>,
         requests: std::cell::Cell<usize>,
