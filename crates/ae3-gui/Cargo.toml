@@ -17,7 +17,11 @@ eframe = { workspace = true, features = [
     "wayland",
     "x11",
 ] }
-
+# Only the table widget; no image loaders, no mime guessing.
+egui_extras = { version = "0.37", default-features = false }
+# Native folder picker. The xdg-portal backend talks D-Bus on Linux, so no
+# GTK is linked; macOS and Windows use the system dialogs.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 # eframe's `wayland` feature does not enable winit's dlopen loading, which would
 # link libwayland at build time. Feature unification switches winit and glutin
