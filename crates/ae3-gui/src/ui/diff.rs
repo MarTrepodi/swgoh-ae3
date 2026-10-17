@@ -117,6 +117,9 @@ pub fn tab(app: &mut Ae3App, ui: &mut egui::Ui) {
     let mut clicked = None;
     let rows = &app.model.diff.rows;
     let selection = &app.model.diff.selection;
+    // A click on a cell's text selects its row. Selectable labels would
+    // take the click for text selection, so the row never saw it.
+    ui.style_mut().interaction.selectable_labels = false;
     TableBuilder::new(ui)
         .id_salt("diff")
         .striped(true)
