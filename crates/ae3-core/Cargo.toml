@@ -10,6 +10,8 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Parse and write only; no preserve_order, no debug.
+toml = { version = "1.1", default-features = false, features = ["std", "serde", "parse", "display"] }
 ureq.workspace = true
 
 [lints]

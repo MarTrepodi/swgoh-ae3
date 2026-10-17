@@ -3,10 +3,11 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 /// One of the asset sets the game publishes per device family.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Platform {
     #[default]
     Windows,
@@ -55,6 +56,19 @@ impl FromStr for Platform {
             .into_iter()
             .find(|p| p.name().eq_ignore_ascii_case(s))
             .ok_or_else(|| UnknownPlatform(s.to_owned()))
+    }
+}
+
+impl Serialize for Platform {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Platform {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 

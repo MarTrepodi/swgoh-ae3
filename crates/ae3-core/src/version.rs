@@ -22,7 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::http::{HttpError, Transport};
@@ -41,7 +41,10 @@ pub const MAX_PROBE_STEPS: u64 = 50;
 const LAST_KNOWN_FILE: &str = "last-asset-version";
 
 /// A numbered release of the game's downloadable content, such as `100054`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
 pub struct AssetVersion(pub u64);
 
 impl fmt::Display for AssetVersion {
@@ -121,6 +124,15 @@ impl CdnLocation {
     #[must_use]
     pub fn manifest_url(&self, platform: Platform) -> String {
         self.file_url(platform, "manifest.data")
+    }
+
+    /// The URL of `package` for `platform`; `None` for a Package kind AE3
+    /// does not know the file extension of.
+    #[must_use]
+    pub fn package_url(&self, platform: Platform, package: &crate::Package) -> Option<String> {
+        package
+            .file_name()
+            .map(|name| self.file_url(platform, &name))
     }
 }
 
@@ -393,6 +405,18 @@ mod tests {
                     url: url.to_owned(),
                     status: 404,
                 })
+        }
+
+        fn get_range(
+            &self,
+            url: &str,
+            _start: u64,
+            _end_inclusive: u64,
+        ) -> Result<crate::http::RangeResponse, HttpError> {
+            Err(HttpError::Status {
+                url: url.to_owned(),
+                status: 404,
+            })
         }
 
         fn exists(&self, url: &str) -> Result<bool, HttpError> {

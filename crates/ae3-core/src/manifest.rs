@@ -90,6 +90,38 @@ impl Package {
             .split_once('_')
             .map_or(&self.name, |(head, _)| head)
     }
+
+    /// The Package's file name on the CDN, such as `charui_bossk.bundle` or
+    /// `audio_dataprimer.wwpkg`; `None` for a kind AE3 does not know.
+    #[must_use]
+    pub fn file_name(&self) -> Option<String> {
+        self.kind
+            .file_extension()
+            .map(|ext| format!("{}.{ext}", self.name))
+    }
+}
+
+impl PackageKind {
+    /// The extension the CDN gives files of this kind.
+    #[must_use]
+    pub fn file_extension(self) -> Option<&'static str> {
+        match self {
+            Self::Bundle => Some("bundle"),
+            Self::AudioPackage => Some("wwpkg"),
+            Self::Other(_) => None,
+        }
+    }
+
+    /// The Manifest's `packageType` value, which also sorts Bundles first,
+    /// then Audio Packages, then unknown kinds.
+    #[must_use]
+    pub fn code(self) -> u64 {
+        match self {
+            Self::Bundle => 0,
+            Self::AudioPackage => 1,
+            Self::Other(n) => n,
+        }
+    }
 }
 
 impl Manifest {
