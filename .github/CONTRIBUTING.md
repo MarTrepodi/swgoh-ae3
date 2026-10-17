@@ -33,6 +33,7 @@ The workspace is split into crates under `crates/`:
 | `ae3` | The command-line tool |
 | `ae3-gui` | The desktop app (egui) |
 | `ae3-oracle` | Development-only cross-checks; never shipped |
+| `ae3-gui-tests` | Headless interaction and snapshot tests of the desktop app; never shipped |
 
 The binaries only translate input and present results. New behaviour belongs in `ae3-core` (or the crate below it) so the CLI and GUI stay in step.
 
@@ -65,8 +66,11 @@ Run these before opening a pull request:
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo test --workspace --exclude ae3-gui-tests --all-features
+cargo test -p ae3-gui-tests
 ```
+
+`ae3-gui-tests` is left out of the `--all-features` run because its `snapshots` feature needs a GPU; the last line runs its interaction tests, which need none. See [UI tests](#ui-tests).
 
 Tests that need the network are `#[ignore]`d. Run them when your change touches downloads, the CDN or the gamedata mirror:
 
@@ -75,6 +79,36 @@ cargo test --workspace --all-features -- --ignored
 ```
 
 Write tests for new behaviour and for every bug fix: a test that fails before the fix and passes after it. GUI logic lives in a model separate from rendering so it can be tested headless.
+
+### UI tests
+
+The `ae3-gui-tests` crate drives the real window headless with [egui_kittest](https://crates.io/crates/egui_kittest). It never touches the network: a fake CDN serves `meta.json`, Manifests and the fixture Packages.
+
+- **Interaction tests** (`tests/interaction.rs`) find widgets in the window's AccessKit tree by role and label, click, type and press keys, and check what the window shows and what the app did. They need no GPU. Tests that use fixtures skip without them, unless `AE3_REQUIRE_FIXTURES=1`.
+
+  ```bash
+  AE3_FIXTURES=$PWD/fixtures cargo test -p ae3-gui-tests
+  ```
+
+- **Snapshot tests** (`tests/snapshots.rs`, behind the `snapshots` feature) render the window with wgpu and compare it with the PNGs in `crates/ae3-gui-tests/tests/snapshots/`. They need a GPU adapter; a software one works (CI uses Mesa's lavapipe on Linux).
+
+  ```bash
+  cargo test -p ae3-gui-tests --features snapshots
+  ```
+
+  A failing comparison writes `<name>.diff.png` and `<name>.new.png` next to the reference (git ignores them). When a change to the window is intended, accept the new images and commit them with the change:
+
+  ```bash
+  UPDATE_SNAPSHOTS=1 cargo test -p ae3-gui-tests --features snapshots
+  ```
+
+  Rasterizers differ slightly, so references made on one platform can fail on another; CI compares on Linux with lavapipe. If yours only differ in anti-aliasing, regenerate them there (for example in a container with `mesa-vulkan-drivers`, `WGPU_BACKEND=vulkan`).
+
+**Snapshots use synthetic data only.** Everything they show must be made up in the test: invented Package and Asset names, generated textures and sounds. Never put game assets, fixtures or anything derived from them (thumbnails, screenshots) into a snapshot or any other committed image.
+
+Give new widgets an accessible name: the interaction tests find them by it, and they fail when an input widget has none. A visible label next to the widget, `Response::on_hover_text` or `Response::accessible_name` all work.
+
+The shipped `ae3-gui` binary also has a scripted smoke run for CI: with `AE3_GUI_SMOKE=<report.json>` set it loads the latest Manifest from the live CDN, opens a Bundle (`AE3_GUI_SMOKE_BUNDLE`, default `charui_bossk`), its thumbnails and the detail viewer, measures idle CPU, saves a screenshot of its own window (`AE3_GUI_SMOKE_SCREENSHOT`, default the report path with `.png`), writes the report and exits: 0 when every step passed, 1 when one failed, 2 after `AE3_GUI_SMOKE_TIMEOUT` seconds (default 180). It never saves settings.
 
 ### What CI runs
 

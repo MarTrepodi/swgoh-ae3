@@ -210,6 +210,8 @@ scripts/fetch-fixtures.sh
 cargo test --workspace
 ```
 
+The GUI has its own tests in `ae3-gui-tests`, which drive the real window headless and offline. `cargo test -p ae3-gui-tests` runs the interaction tests; the visual snapshot tests need a GPU adapter and run with `--features snapshots`. The [contributing guide](.github/CONTRIBUTING.md#ui-tests) explains both, and how to update snapshots.
+
 The `ae3-oracle` crate is development-only and never shipped. Its default tests check every texture format SWGOH uses against pinned statistics and across Platforms. With the `oracle` feature, which builds `unity-rs-core` and needs a C compiler for its zstd, it also decodes every fixture texture with that library and compares pixels:
 
 ```bash
