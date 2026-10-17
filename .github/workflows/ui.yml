@@ -111,12 +111,6 @@ jobs:
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-24.04
     env:
-      # The runner has no GPU. wgpu renders on lavapipe, Mesa's CPU Vulkan
-      # driver; pointing the Vulkan loader at its ICD alone keeps any other
-      # driver from being picked. VK_DRIVER_FILES is the current name,
-      # VK_ICD_FILENAMES the one older loaders read.
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
       WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v6
@@ -128,6 +122,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev mesa-vulkan-drivers libvulkan1 vulkan-tools
+      # The runner has no GPU. wgpu renders on lavapipe, Mesa's CPU Vulkan
+      # driver; pointing the Vulkan loader at its ICD alone keeps any other
+      # driver from being picked. The manifest's file name differs between
+      # Mesa packagings (lvp_icd.json, lvp_icd.x86_64.json), so look it up
+      # rather than hard-code it. VK_DRIVER_FILES is the current variable,
+      # VK_ICD_FILENAMES the one older loaders read.
+      - name: Point the Vulkan loader at lavapipe
+        run: |
+          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
+          if [[ -z "$icd" ]]; then
+            echo "::error::No lavapipe ICD manifest under /usr/share/vulkan/icd.d"
+            ls -l /usr/share/vulkan/icd.d || true
+            exit 1
+          fi
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
       - name: Show the Vulkan device
         run: vulkaninfo --summary
       - name: Cache fixtures
