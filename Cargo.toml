@@ -9,7 +9,10 @@ rust-version = "1.99"
 license = "MIT"
 
 [workspace.dependencies]
+ae3-audio = { path = "crates/ae3-audio" }
 ae3-core = { path = "crates/ae3-core" }
+ae3-image = { path = "crates/ae3-image" }
+ae3-unity = { path = "crates/ae3-unity" }
 clap = { version = "4.6", features = ["derive"] }
 eframe = { version = "0.37", default-features = false }
 serde = { version = "1", features = ["derive"] }

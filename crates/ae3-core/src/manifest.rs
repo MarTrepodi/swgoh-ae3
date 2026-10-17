@@ -86,9 +86,7 @@ impl Package {
     /// The Package's Category: its name before the first underscore.
     #[must_use]
     pub fn category(&self) -> &str {
-        self.name
-            .split_once('_')
-            .map_or(&self.name, |(head, _)| head)
+        category_of(&self.name)
     }
 
     /// The Package's file name on the CDN, such as `charui_bossk.bundle` or
@@ -99,6 +97,13 @@ impl Package {
             .file_extension()
             .map(|ext| format!("{}.{ext}", self.name))
     }
+}
+
+/// The Category of a Package name: the part before its first underscore,
+/// such as `charui` for `charui_bossk`.
+#[must_use]
+pub fn category_of(name: &str) -> &str {
+    name.split_once('_').map_or(name, |(head, _)| head)
 }
 
 impl PackageKind {
