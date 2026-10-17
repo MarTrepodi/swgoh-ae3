@@ -8,6 +8,8 @@ name: Full CI
 #   - on release-plz's release pull request, so nothing ships untested;
 #   - on any pull request labelled full-ci;
 #   - on demand (workflow_dispatch).
+# A failing nightly run opens (or comments on) a nightly-failure issue; the
+# next passing one closes it.
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -236,4 +238,57 @@ jobs:
           if [[ "$FAILED" == "true" ]]; then
             echo "::error::A full CI job failed or was cancelled."
             exit 1
+          fi
+
+  # Nightly runs have no pull request to show their result, so a failure
+  # opens a nightly-failure issue (or comments on the open one) listing the
+  # failed jobs, and the next passing run closes it. Runs the gate skipped
+  # (main unchanged) tested nothing and report nothing.
+  report:
+    name: Nightly report
+    if: always() && github.event_name == 'schedule' && (needs.gate.result != 'success' || needs.gate.outputs.run == 'true')
+    needs: [gate, result]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.result.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          label=nightly-failure
+          gh label create "$label" --color B60205 \
+            --description "The nightly full CI run is failing" --force
+          open=$(gh issue list --label "$label" --state open --json number --jq '.[].number')
+
+          if [[ "$RESULT" == "success" ]]; then
+            for issue in $open; do
+              gh issue close "$issue" --comment "Nightly full CI passes again: $RUN_URL"
+            done
+            exit 0
+          fi
+
+          failed=$(gh api --paginate \
+            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[]
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              | select(.name != "Full CI result")
+              | "- \(.name) (\(.conclusion))"')
+          body=$RUNNER_TEMP/body.md
+          {
+            echo "Nightly full CI failed on \`$GITHUB_SHA\`: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            echo
+            echo "${failed:-- none recorded; see the run}"
+          } > "$body"
+
+          first=${open%%[[:space:]]*}
+          if [[ -n "$first" ]]; then
+            gh issue comment "$first" --body-file "$body"
+          else
+            gh issue create --title "Nightly full CI is failing" --label "$label" --body-file "$body"
           fi
