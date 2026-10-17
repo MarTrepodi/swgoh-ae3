@@ -21,6 +21,7 @@ pub mod diff;
 pub mod download;
 pub mod error;
 pub mod export;
+pub mod gltf;
 pub mod guard;
 pub mod http;
 pub mod index;
@@ -46,8 +47,8 @@ pub use ae3_unity::Value;
 pub use audio::{LoadedAudioPackage, SoundInfo};
 pub use bundle::{
     AssetInfo, AssetKind, AssetRef, Atlas, AtlasTexture, AudioClipData, BundleView,
-    DependencySource, DirectoryDependencies, LoadedBundle, SpriteRect, TextAsset, TextureInfo,
-    cut_sprite,
+    DependencySource, DirectoryDependencies, LoadedBundle, MeshMaterial, MeshRenderers, SpriteRect,
+    TextAsset, TextureInfo, cut_sprite,
 };
 pub use cache::{CacheStats, PackageCache, PruneReport};
 pub use config::{Config, ConfigFile, Language, Settings};
@@ -58,6 +59,7 @@ pub use export::{
     ExportEvent, ExportFailure, ExportOptions, ExportProgress, ExportReport, SkipReason,
     SkippedAsset, WrittenFile, export_audio_package, export_bundle, sanitize_file_name,
 };
+pub use gltf::GlbMaterial;
 pub use index::{
     AssetIndex, AssetKinds, BundleContents, Coverage, IndexBuilder, IndexError, IndexFile,
     IndexOptions, IndexPlan, IndexProgress, IndexReport, IndexRun, IndexStatus, IndexedAsset,

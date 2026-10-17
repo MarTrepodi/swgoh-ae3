@@ -24,6 +24,7 @@
 //! layout = "default"       # default | ae2
 //! skip-existing = false
 //! structured = "combined" # separate | combined | none
+//! mesh-format = "obj"      # obj | glb | both
 //! language = "ENG_US"      # display names for search; ENG_US, FRE_FR, ...
 //!
 //! [gui]
@@ -181,6 +182,34 @@ choice_enum! {
 }
 
 choice_enum! {
+    /// The file format exported Meshes are written in.
+    MeshFormat, "mesh format" {
+        /// Wavefront OBJ: geometry only.
+        #[default]
+        Obj => "obj",
+        /// Binary glTF, with each submesh's main texture embedded as PNG
+        /// when the Bundle shows which one it is.
+        Glb => "glb" | "gltf",
+        /// Both files, side by side.
+        Both => "both",
+    }
+}
+
+impl MeshFormat {
+    /// Whether OBJ files are written.
+    #[must_use]
+    pub fn writes_obj(self) -> bool {
+        matches!(self, Self::Obj | Self::Both)
+    }
+
+    /// Whether glb files are written.
+    #[must_use]
+    pub fn writes_glb(self) -> bool {
+        matches!(self, Self::Glb | Self::Both)
+    }
+}
+
+choice_enum! {
     /// The language of the display names search matches (the Name Index),
     /// named as the community gamedata names its localization files.
     Language, "language" {
@@ -330,6 +359,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured: Option<StructuredMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_format: Option<MeshFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub no_cache: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<Language>,
@@ -349,6 +380,7 @@ pub const ENV_VARS: &[&str] = &[
     "AE3_LAYOUT",
     "AE3_SKIP_EXISTING",
     "AE3_STRUCTURED",
+    "AE3_MESH_FORMAT",
     "AE3_NO_CACHE",
     "AE3_LANGUAGE",
 ];
@@ -392,6 +424,7 @@ impl Settings {
             layout: higher.layout.or(self.layout),
             skip_existing: higher.skip_existing.or(self.skip_existing),
             structured: higher.structured.or(self.structured),
+            mesh_format: higher.mesh_format.or(self.mesh_format),
             no_cache: higher.no_cache.or(self.no_cache),
             language: higher.language.or(self.language),
         }
@@ -438,6 +471,7 @@ impl Settings {
             layout: get(&lookup, "AE3_LAYOUT", parsed)?,
             skip_existing: get(&lookup, "AE3_SKIP_EXISTING", parse_bool)?,
             structured: get(&lookup, "AE3_STRUCTURED", parsed)?,
+            mesh_format: get(&lookup, "AE3_MESH_FORMAT", parsed)?,
             no_cache: get(&lookup, "AE3_NO_CACHE", parse_bool)?,
             language: get(&lookup, "AE3_LANGUAGE", parsed)?,
         })
@@ -543,6 +577,8 @@ pub struct Config {
     pub skip_existing: bool,
     /// How whole-Bundle exports write Structured Assets.
     pub structured: StructuredMode,
+    /// The file format exported Meshes are written in.
+    pub mesh_format: MeshFormat,
     /// Download into a throwaway directory instead of the cache.
     pub no_cache: bool,
     /// The language of the display names search matches.
@@ -564,6 +600,7 @@ impl Default for Config {
             layout: Layout::default(),
             skip_existing: false,
             structured: StructuredMode::default(),
+            mesh_format: MeshFormat::default(),
             no_cache: false,
             language: Language::default(),
         }
@@ -627,6 +664,9 @@ impl Config {
         if let Some(v) = s.structured {
             self.structured = v;
         }
+        if let Some(v) = s.mesh_format {
+            self.mesh_format = v;
+        }
         if let Some(v) = s.no_cache {
             self.no_cache = v;
         }
@@ -682,6 +722,7 @@ mod tests {
         assert_eq!(c.layout, Layout::Default);
         assert!(!c.skip_existing && !c.no_cache);
         assert_eq!(c.structured, StructuredMode::Combined);
+        assert_eq!(c.mesh_format, MeshFormat::Obj);
         assert_eq!(c.language, Language::EngUs);
     }
 
@@ -706,6 +747,7 @@ mod tests {
             parallel-downloads = 2
             layout = "ae2"
             structured = "separate"
+            mesh-format = "both"
             "#,
         )
         .unwrap()
@@ -715,10 +757,12 @@ mod tests {
             ("AE3_IMAGE_FORMAT", "png"),
             ("AE3_CACHE_CAP", "1GiB"),
             ("AE3_STRUCTURED", "none"),
+            ("AE3_MESH_FORMAT", "obj"),
         ])
         .unwrap();
         let cli = Settings {
             platform: Some(Platform::Windows),
+            mesh_format: Some(MeshFormat::Glb),
             ..Settings::default()
         };
         let c = Config::resolve(&cli, &env, &file);
@@ -728,6 +772,7 @@ mod tests {
         assert_eq!(c.parallel_downloads, 2, "file over default");
         assert_eq!(c.layout, Layout::Ae2);
         assert_eq!(c.structured, StructuredMode::None, "env over file");
+        assert_eq!(c.mesh_format, MeshFormat::Glb, "CLI over env and file");
         assert_eq!(c.audio_format, AudioFormat::Ogg, "default");
     }
 
@@ -742,6 +787,7 @@ mod tests {
             ("AE3_OUTPUT_DIR", "/tmp/out"),
             ("AE3_PADDING_RESTORATION", ""),
             ("AE3_STRUCTURED", "None"),
+            ("AE3_MESH_FORMAT", "GLTF"),
         ])
         .unwrap();
         assert_eq!(s.atlas_cutting, Some(false));
@@ -752,6 +798,7 @@ mod tests {
         assert_eq!(s.output_dir, Some(PathBuf::from("/tmp/out")));
         assert_eq!(s.padding_restoration, None, "empty means unset");
         assert_eq!(s.structured, Some(StructuredMode::None));
+        assert_eq!(s.mesh_format, Some(MeshFormat::Glb));
 
         for (var, value) in [
             ("AE3_PARALLEL_DOWNLOADS", "0"),
@@ -760,6 +807,7 @@ mod tests {
             ("AE3_CACHE_CAP", "lots"),
             ("AE3_IMAGE_FORMAT", "jpeg"),
             ("AE3_STRUCTURED", "merged"),
+            ("AE3_MESH_FORMAT", "fbx"),
         ] {
             let err = env(&[(var, value)]).unwrap_err();
             assert!(
@@ -780,6 +828,7 @@ mod tests {
                 "AE3_AUDIO_FORMAT" => "raw",
                 "AE3_LAYOUT" => "ae2",
                 "AE3_STRUCTURED" => "separate",
+                "AE3_MESH_FORMAT" => "both",
                 "AE3_LANGUAGE" => "fr",
                 "AE3_OUTPUT_DIR" | "AE3_CACHE_DIR" => "/x",
                 _ => "true",
@@ -808,6 +857,7 @@ mod tests {
                 layout: Some(Layout::Ae2),
                 skip_existing: Some(true),
                 structured: Some(StructuredMode::Separate),
+                mesh_format: Some(MeshFormat::Both),
                 no_cache: Some(false),
                 language: Some(Language::GerDe),
             },
@@ -820,6 +870,7 @@ mod tests {
         assert!(text.contains("cache-cap = \"2GB\""), "{text}");
         assert!(text.contains("platform = \"iOS\""), "{text}");
         assert!(text.contains("structured = \"separate\""), "{text}");
+        assert!(text.contains("mesh-format = \"both\""), "{text}");
         assert!(
             text.contains("[gui]\nlast-asset-version = 100054"),
             "{text}"
@@ -878,5 +929,15 @@ mod tests {
         for &f in ImageFormat::ALL {
             assert_eq!(f.to_string().parse(), Ok(f));
         }
+        for &f in MeshFormat::ALL {
+            assert_eq!(f.to_string().parse(), Ok(f));
+        }
+        assert_eq!(
+            MeshFormat::ALL
+                .iter()
+                .map(|f| (f.writes_obj(), f.writes_glb()))
+                .collect::<Vec<_>>(),
+            [(true, false), (false, true), (true, true)]
+        );
     }
 }

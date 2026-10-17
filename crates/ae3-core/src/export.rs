@@ -19,9 +19,10 @@
 //! always written as their own files. TextAssets keep their bytes under a
 //! sniffed extension; Meshes
 //! become Wavefront OBJ (X negated and windings reversed, as swgoh-ae2 wrote
-//! them). Scene plumbing such as Transforms is counted in
-//! [`ExportReport::ignored`] unless asked for by path id, when it is written
-//! as JSON.
+//! them), binary glTF with the main texture of each submesh's Material
+//! embedded as PNG, or both, as [`ExportOptions::mesh_format`] says. Scene
+//! plumbing such as Transforms is counted in [`ExportReport::ignored`]
+//! unless asked for by path id, when it is written as JSON.
 //!
 //! File names are sanitized for every OS. When two Assets of one Package
 //! would get the same file, the one that sorts first (by kind, then path id)
@@ -34,8 +35,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ae3_audio::Sound;
 use ae3_image::{PngCompression, RgbaImage};
@@ -44,14 +45,18 @@ use serde::Serialize;
 
 use crate::audio::{LoadedAudioPackage, sound_extension};
 use crate::bundle::{
-    AssetInfo, AssetKind, AssetRef, Atlas, AtlasTexture, BundleView, LoadedBundle, SpriteRect,
-    cut_sprite,
+    AssetInfo, AssetKind, AssetRef, Atlas, AtlasTexture, BundleView, LoadedBundle, MeshMaterial,
+    MeshRenderers, SpriteRect, cut_sprite,
 };
-use crate::config::{AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout, StructuredMode};
+use crate::config::{
+    AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout, MeshFormat, StructuredMode,
+};
 use crate::download::DEFAULT_PARALLEL_DOWNLOADS;
 use crate::error::AssetError;
+use crate::gltf::GlbMaterial;
 use crate::guard::catch_panic;
 use crate::manifest::category_of;
+use crate::mesh::Mesh;
 
 /// The longest file name stem AE3 writes, in bytes, leaving room for a
 /// `_{path_id}` suffix and an extension within common 255-byte limits.
@@ -83,6 +88,8 @@ pub struct ExportOptions {
     pub skip_existing: bool,
     /// How whole-Bundle exports write Structured Assets.
     pub structured: StructuredMode,
+    /// The file format Meshes are written in.
+    pub mesh_format: MeshFormat,
     /// Packages exported at once by a batch; at least 1.
     pub parallel: usize,
 }
@@ -107,6 +114,7 @@ impl ExportOptions {
             layout: Layout::default(),
             skip_existing: false,
             structured: StructuredMode::default(),
+            mesh_format: MeshFormat::default(),
             parallel: DEFAULT_PARALLEL_DOWNLOADS,
         }
     }
@@ -125,6 +133,7 @@ impl ExportOptions {
             layout: config.layout,
             skip_existing: config.skip_existing,
             structured: config.structured,
+            mesh_format: config.mesh_format,
             parallel: config.parallel_downloads.max(1),
         }
     }
@@ -439,7 +448,7 @@ enum Action {
     Combined,
     Text(&'static str),
     AudioClip(&'static str),
-    Mesh,
+    Mesh(MeshFormat),
     Skip(String),
 }
 
@@ -456,9 +465,15 @@ impl Action {
             Self::Image => image_ext,
             Self::Json | Self::Atlas | Self::Combined => "json",
             Self::Text(ext) | Self::AudioClip(ext) => ext,
-            Self::Mesh => "obj",
+            Self::Mesh(MeshFormat::Glb) => "glb",
+            Self::Mesh(_) => "obj",
             Self::Skip(_) => "",
         }
+    }
+
+    /// The extension of a second file written beside the first.
+    fn extra_extension(&self) -> Option<&'static str> {
+        matches!(self, Self::Mesh(MeshFormat::Both)).then_some("glb")
     }
 }
 
@@ -486,18 +501,31 @@ fn assign_stems(planned: &mut [Planned<'_>], image_ext: &str, reserved: Option<&
         if matches!(p.action, Action::Skip(_)) {
             continue;
         }
-        let ext = p.action.extension(image_ext);
+        let exts: Vec<&str> = std::iter::once(p.action.extension(image_ext))
+            .chain(p.action.extra_extension())
+            .collect();
         let namespace = if matches!(p.action, Action::Atlas) {
             "sprites/"
         } else {
             ""
         };
-        let key = |stem: &str| format!("{namespace}{stem}.{ext}").to_lowercase();
-        if !taken.insert(key(&p.stem)) {
+        // Claims the stem for every file the Asset writes, or none.
+        let mut claim = |stem: &str| {
+            let keys: Vec<String> = exts
+                .iter()
+                .map(|ext| format!("{namespace}{stem}.{ext}").to_lowercase())
+                .collect();
+            let free = keys.iter().all(|k| !taken.contains(k));
+            if free {
+                taken.extend(keys);
+            }
+            free
+        };
+        if !claim(&p.stem) {
             let base = format!("{}_{}", p.stem, p.info.path_id);
             let mut stem = base.clone();
             let mut n = 2;
-            while !taken.insert(key(&stem)) {
+            while !claim(&stem) {
                 stem = format!("{base}_{n}");
                 n += 1;
             }
@@ -653,9 +681,12 @@ impl<'a> Batch<'a> {
         assign_stems(&mut planned, self.image_ext(), combined_name.as_deref());
 
         let dir = self.options.bundle_dir(bundle.category(), package);
-        let mut combined = match combined_name {
-            Some(file) => self.open_combined(&dir.join(file), package),
-            None => Combined::Unused,
+        let mut state = PackageState {
+            combined: match combined_name {
+                Some(file) => self.open_combined(&dir.join(file), package),
+                None => Combined::Unused,
+            },
+            meshes: MeshTextures::default(),
         };
         let total = planned.len();
         for (done, p) in planned.iter().enumerate() {
@@ -664,22 +695,21 @@ impl<'a> Batch<'a> {
                 break;
             }
             let name = p.info.display_name();
-            let result = catch_panic(|| {
-                self.export_asset(&view, &dir, p, &name, &mut combined, &mut report)
-            })
-            .unwrap_or_else(|message| {
-                Err(AssetError::panicked(format!(
-                    "{package}: Asset {}",
-                    p.info.path_id
-                ))(message))
-            });
+            let result =
+                catch_panic(|| self.export_asset(&view, &dir, p, &name, &mut state, &mut report))
+                    .unwrap_or_else(|message| {
+                        Err(AssetError::panicked(format!(
+                            "{package}: Asset {}",
+                            p.info.path_id
+                        ))(message))
+                    });
             if let Err(e) = result {
                 report.failure(package, Some((&name, Some(p.info.path_id))), &e);
             }
             self.asset_finished(package, &name, done + 1, total);
         }
         // A cancelled export drops the file unfinished, which removes it.
-        if let Combined::Writing(json) = combined
+        if let Combined::Writing(json) = state.combined
             && !report.cancelled
         {
             match json.finish() {
@@ -738,7 +768,7 @@ impl<'a> Batch<'a> {
                 view.audio_clip(info.path_id)
                     .map_or("bin", |clip| clip.extension),
             ),
-            AssetKind::Mesh => Action::Mesh,
+            AssetKind::Mesh => Action::Mesh(self.options.mesh_format),
             AssetKind::Other => return None,
         })
     }
@@ -749,14 +779,14 @@ impl<'a> Batch<'a> {
         dir: &Path,
         p: &Planned<'_>,
         name: &str,
-        combined: &mut Combined,
+        state: &mut PackageState,
         report: &mut ExportReport,
     ) -> Result<(), AssetError> {
         let package = view.loaded().name();
         let path_id = p.info.path_id;
         let file = |ext: &str| dir.join(format!("{}.{ext}", p.stem));
         match &p.action {
-            Action::Combined => match combined {
+            Action::Combined => match &mut state.combined {
                 Combined::Writing(json) => json.push(&p.stem, p.info, &view.structured(path_id)?),
                 Combined::Exists(rel) => {
                     self.skip_existing(report, package, name, Some(path_id), rel);
@@ -802,10 +832,27 @@ impl<'a> Batch<'a> {
                     Ok(view.audio_clip(path_id)?.bytes)
                 })
             }
-            Action::Mesh => {
-                self.write_with(package, name, Some(path_id), &file("obj"), report, || {
-                    Ok(view.mesh(path_id)?.to_obj().into_bytes())
-                })
+            Action::Mesh(format) => {
+                // Decoded once for both files.
+                let mut mesh: Option<Mesh> = None;
+                if format.writes_obj() {
+                    self.write_with(package, name, Some(path_id), &file("obj"), report, || {
+                        let decoded = view.mesh(path_id)?;
+                        let obj = decoded.to_obj().into_bytes();
+                        mesh = Some(decoded);
+                        Ok(obj)
+                    })?;
+                }
+                if format.writes_glb() {
+                    self.write_noted(package, name, Some(path_id), &file("glb"), report, || {
+                        let mesh = match mesh.take() {
+                            Some(mesh) => mesh,
+                            None => view.mesh(path_id)?,
+                        };
+                        Ok(self.glb(view, &mesh, path_id, &mut state.meshes))
+                    })?;
+                }
+                Ok(())
             }
             Action::Atlas => self.export_atlas(view, &dir.join("sprites"), p, name, report),
         }
@@ -824,6 +871,58 @@ impl<'a> Batch<'a> {
                 source,
             }
         })
+    }
+
+    /// A Mesh as glb, with the main textures of its Materials embedded when
+    /// they resolve, plus a note when none is.
+    fn glb(
+        &self,
+        view: &BundleView<'_>,
+        mesh: &Mesh,
+        path_id: i64,
+        textures: &mut MeshTextures,
+    ) -> (Vec<u8>, Option<String>) {
+        let renderers = textures
+            .renderers
+            .get_or_insert_with(|| view.mesh_renderers());
+        let materials = match view.mesh_materials(path_id, renderers) {
+            Ok(materials) => materials,
+            Err(e) => return (mesh.to_glb(&[]), Some(format!("geometry only: {e}"))),
+        };
+        let pngs: Vec<Option<Result<Arc<[u8]>, String>>> = materials
+            .iter()
+            .map(|m| {
+                let m = m.as_ref()?;
+                Some(match &m.texture {
+                    Some(texture) => textures.png(self, view, &texture.asset),
+                    None => Err(m.texture_error.clone().unwrap_or_default()),
+                })
+            })
+            .collect();
+        let glb_materials: Vec<Option<GlbMaterial<'_>>> = materials
+            .iter()
+            .zip(&pngs)
+            .map(|(m, png)| {
+                m.as_ref().map(|m: &MeshMaterial| GlbMaterial {
+                    name: &m.name,
+                    png: png.as_ref().and_then(|p| p.as_deref().ok()),
+                })
+            })
+            .collect();
+        let used = &glb_materials[..glb_materials.len().min(mesh.submeshes.len())];
+        let note = if used.iter().flatten().any(|m| m.png.is_some()) {
+            None
+        } else if materials.is_empty() {
+            Some("geometry only: no renderer in this Bundle draws it".to_owned())
+        } else {
+            let reason = pngs
+                .iter()
+                .flatten()
+                .find_map(|p| p.as_ref().err())
+                .map_or("no Material resolves", String::as_str);
+            Some(format!("geometry only: {reason}"))
+        };
+        (mesh.to_glb(used), note)
     }
 
     /// Atlas Cutting: every Sprite to `sprites/{atlas}/`, plus
@@ -1075,6 +1174,20 @@ impl<'a> Batch<'a> {
         report: &mut ExportReport,
         make: impl FnOnce() -> Result<Vec<u8>, AssetError>,
     ) -> Result<(), AssetError> {
+        self.write_noted(package, asset, path_id, rel, report, || Ok((make()?, None)))
+    }
+
+    /// [`Batch::write_with`] for a `make` that also gives the written file's
+    /// note.
+    fn write_noted(
+        &self,
+        package: &str,
+        asset: &str,
+        path_id: Option<i64>,
+        rel: &Path,
+        report: &mut ExportReport,
+        make: impl FnOnce() -> Result<(Vec<u8>, Option<String>), AssetError>,
+    ) -> Result<(), AssetError> {
         let suffix = path_id.map_or_else(|| "dup".to_owned(), |id| id.to_string());
         let rel = self.claimed(rel, package, &suffix);
         let path = self.options.output_dir.join(&rel);
@@ -1082,16 +1195,61 @@ impl<'a> Batch<'a> {
             self.skip_existing(report, package, asset, path_id, &rel);
             return Ok(());
         }
-        let bytes = make()?;
+        let (bytes, note) = make()?;
         write_atomically(&path, &bytes)?;
         report.written.push(WrittenFile {
             path,
             package: package.to_owned(),
             asset: asset.to_owned(),
             bytes: bytes.len() as u64,
-            note: None,
+            note,
         });
         Ok(())
+    }
+}
+
+/// What one Bundle's export keeps between its Assets.
+struct PackageState {
+    combined: Combined,
+    meshes: MeshTextures,
+}
+
+/// The renderers and encoded textures glb export looks up, built as first
+/// needed and shared by the Bundle's Meshes.
+#[derive(Default)]
+struct MeshTextures {
+    renderers: Option<MeshRenderers>,
+    /// PNGs by texture, or why the texture could not be decoded.
+    pngs: HashMap<AssetRef, Result<Arc<[u8]>, String>>,
+}
+
+impl MeshTextures {
+    fn png(
+        &mut self,
+        batch: &Batch<'_>,
+        view: &BundleView<'_>,
+        texture: &AssetRef,
+    ) -> Result<Arc<[u8]>, String> {
+        if let Some(png) = self.pngs.get(texture) {
+            return png.clone();
+        }
+        let png = catch_panic(|| {
+            let image = view.decode_texture_ref(texture)?;
+            ae3_image::encode(
+                &image,
+                ae3_image::ImageFormat::Png(batch.options.png_compression),
+            )
+            .map_err(|source| AssetError::Image {
+                package: texture.package.clone(),
+                path_id: texture.path_id,
+                source,
+            })
+        })
+        .map_err(|message| format!("decoding the texture panicked: {message}"))
+        .and_then(|r| r.map_err(|e| e.to_string()))
+        .map(Arc::from);
+        self.pngs.insert(texture.clone(), png.clone());
+        png
     }
 }
 

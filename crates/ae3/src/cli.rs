@@ -226,6 +226,9 @@ pub struct ExportArgs {
     /// objects [default: combined].
     #[arg(long, value_enum, value_name = "MODE")]
     pub structured: Option<StructuredMode>,
+    /// Mesh file format [default: obj].
+    #[arg(long, value_enum, value_name = "FORMAT")]
+    pub mesh_format: Option<MeshFormat>,
 }
 
 /// How extracted files are arranged under `--output`.
@@ -254,6 +257,27 @@ impl From<StructuredMode> for config::StructuredMode {
             StructuredMode::Separate => Self::Separate,
             StructuredMode::Combined => Self::Combined,
             StructuredMode::None => Self::None,
+        }
+    }
+}
+
+/// How Meshes are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MeshFormat {
+    /// Wavefront OBJ, geometry only.
+    Obj,
+    /// Binary glTF, with the main texture embedded when the Bundle names it.
+    Glb,
+    /// Both, side by side.
+    Both,
+}
+
+impl From<MeshFormat> for config::MeshFormat {
+    fn from(format: MeshFormat) -> Self {
+        match format {
+            MeshFormat::Obj => Self::Obj,
+            MeshFormat::Glb => Self::Glb,
+            MeshFormat::Both => Self::Both,
         }
     }
 }
@@ -386,6 +410,7 @@ impl Cli {
             settings.padding_restoration =
                 tri_state(export.padding_restoration, export.no_padding_restoration);
             settings.structured = export.structured.map(config::StructuredMode::from);
+            settings.mesh_format = export.mesh_format.map(config::MeshFormat::from);
         }
         settings
     }
@@ -639,6 +664,18 @@ mod tests {
             .settings();
         assert_eq!(s.structured, Some(config::StructuredMode::None));
         assert!(parse("ae3 extract a --structured merged").is_err());
+        assert_eq!(s.mesh_format, None);
+        for (flag, format) in [
+            ("obj", config::MeshFormat::Obj),
+            ("glb", config::MeshFormat::Glb),
+            ("both", config::MeshFormat::Both),
+        ] {
+            let s = parse(&format!("ae3 extract a --mesh-format {flag}"))
+                .unwrap()
+                .settings();
+            assert_eq!(s.mesh_format, Some(format));
+        }
+        assert!(parse("ae3 extract a --mesh-format fbx").is_err());
     }
 
     #[test]
