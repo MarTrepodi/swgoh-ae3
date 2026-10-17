@@ -15,6 +15,7 @@ pub struct FakeTransport {
     files: Mutex<HashMap<String, Vec<u8>>>,
     failures: Mutex<HashMap<String, VecDeque<HttpError>>>,
     requests: Mutex<Vec<String>>,
+    ranges: Mutex<Vec<(String, u64, u64)>>,
 }
 
 impl FakeTransport {
@@ -47,6 +48,17 @@ impl FakeTransport {
             .iter()
             .filter(|u| *u == url)
             .count()
+    }
+
+    /// The `(start, end_inclusive)` of every Range GET of `url`, in order.
+    pub fn ranges_for(&self, url: &str) -> Vec<(u64, u64)> {
+        self.ranges
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(u, ..)| u == url)
+            .map(|&(_, start, end)| (start, end))
+            .collect()
     }
 
     pub fn total_requests(&self) -> usize {
@@ -87,6 +99,10 @@ impl Transport for FakeTransport {
         start: u64,
         end_inclusive: u64,
     ) -> Result<RangeResponse, HttpError> {
+        self.ranges
+            .lock()
+            .unwrap()
+            .push((url.to_owned(), start, end_inclusive));
         let body = self.lookup(url)?;
         let len = body.len() as u64;
         if start >= len {
@@ -145,5 +161,29 @@ pub fn transient(url: &str) -> HttpError {
     HttpError::Transport {
         url: url.to_owned(),
         message: "connection reset".to_owned(),
+    }
+}
+
+/// The Asset Version 100054 Windows fixtures: `$AE3_FIXTURES/100054/Windows`,
+/// defaulting to `<workspace>/fixtures`.
+pub fn fixtures_dir() -> PathBuf {
+    std::env::var_os("AE3_FIXTURES")
+        .map_or_else(
+            || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"),
+            PathBuf::from,
+        )
+        .join("100054")
+        .join("Windows")
+}
+
+/// A fixture file's bytes, or `None` (after a note on stderr) when absent,
+/// so tests that need it can skip.
+pub fn fixture(name: &str) -> Option<Vec<u8>> {
+    let path = fixtures_dir().join(name);
+    if let Ok(bytes) = fs::read(&path) {
+        Some(bytes)
+    } else {
+        eprintln!("skipping: fixture {} not found", path.display());
+        None
     }
 }

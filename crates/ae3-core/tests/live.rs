@@ -97,3 +97,85 @@ fn cache_downloads_a_small_package_once() {
     drop(cache);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+#[ignore = "needs network access"]
+fn indexes_fifty_live_bundles_from_prefixes() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use ae3_core::{Downloader, IndexBuilder, PackageCache};
+
+    let transport = Arc::new(UreqTransport::new());
+    let location = Resolver::new(&*transport, Platform::Windows, None)
+        .resolve(None)
+        .expect("resolve the latest Asset Version");
+    let root = std::env::temp_dir().join(format!("ae3-live-index-{}", std::process::id()));
+    let cache = Arc::new(
+        PackageCache::open(
+            root.clone(),
+            1 << 30,
+            Downloader::new(Arc::clone(&transport)),
+        )
+        .expect("open cache"),
+    );
+    let full = cache
+        .get_or_fetch_manifest(&location, Platform::Windows)
+        .expect("manifest");
+    // Every n-th Bundle, so the sample spans Categories and sizes.
+    let bundles: Vec<_> = full
+        .packages
+        .iter()
+        .filter(|p| p.kind == PackageKind::Bundle)
+        .collect();
+    let step = (bundles.len() / 50).max(1);
+    let sample = Manifest {
+        packages: bundles
+            .iter()
+            .step_by(step)
+            .take(50)
+            .map(|p| (*p).clone())
+            .collect(),
+        ..full.clone()
+    };
+    let total_size: u64 = sample.packages.iter().map(|p| p.size).sum();
+
+    let builder = IndexBuilder::new(
+        Arc::clone(&cache),
+        location.clone(),
+        Platform::Windows,
+        sample.clone(),
+    );
+    let run = builder
+        .run(&|_| {}, &AtomicBool::new(false))
+        .expect("index run");
+    let report = &run.report;
+    eprintln!(
+        "indexed {} Bundles in {:.2?} ({:.1}/s), {} requests, {} KiB fetched of {} KiB total; {} failed",
+        report.probed,
+        report.elapsed,
+        report.bundles_per_second(),
+        report.requests,
+        report.bytes_fetched / 1024,
+        total_size / 1024,
+        report.failed.len(),
+    );
+    for failure in &report.failed {
+        eprintln!("  {}: {}", failure.bundle, failure.error);
+    }
+    let index_size = std::fs::metadata(&report.path).map_or(0, |m| m.len());
+    eprintln!("index file: {index_size} bytes");
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(report.probed, sample.packages.len());
+    assert!(run.index.coverage().is_complete());
+    assert!(
+        report.bytes_fetched < total_size,
+        "only prefixes are fetched"
+    );
+    let assets: usize = run.index.packages().iter().map(|p| p.assets().len()).sum();
+    assert!(assets >= sample.packages.len(), "{assets} Assets");
+    let first = &sample.packages[0].name;
+    assert!(!run.index.search(first).is_empty());
+    drop(cache);
+    let _ = std::fs::remove_dir_all(root);
+}

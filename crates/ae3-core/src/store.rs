@@ -115,6 +115,12 @@ impl<T: Transport + Send + Sync + 'static> PackageStore<T> {
         &self.inner.manifest
     }
 
+    /// The Manifest, shared rather than copied.
+    #[must_use]
+    pub fn shared_manifest(&self) -> Arc<Manifest> {
+        Arc::clone(&self.inner.manifest)
+    }
+
     #[must_use]
     pub fn location(&self) -> &CdnLocation {
         &self.inner.location
