@@ -1,0 +1,19 @@
+[package]
+name = "ae3-audio"
+description = "Wwise Audio Package (AKPK) reading and WEM conversion for AE3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Pure-Rust inflate only (miniz_oxide); zip's own features stay off.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+lewton = { version = "0.10.2", default-features = false, features = ["ogg"] }
+ogg = { version = "0.8", default-features = false }
+thiserror.workspace = true
+ww2ogg = "0.1.0"
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
+
+[lints]
+workspace = true
