@@ -35,6 +35,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("AE3")
+            // Wayland app_id and X11 WM_CLASS; matches StartupWMClass in
+            // packaging/linux/ae3-gui.desktop so docks group the window.
+            .with_app_id("ae3-gui")
             .with_inner_size([1180.0, 780.0])
             .with_min_inner_size([720.0, 480.0]),
         ..Default::default()
