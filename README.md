@@ -188,6 +188,21 @@ cargo build --release -p ae3 --features serve
 
 The release archives are built without `serve`.
 
+### Tests and fixtures
+
+Many tests decode real game data. `scripts/fetch-fixtures.sh` downloads a pinned, checksummed list of Packages from Asset Version 100054 for every Platform into `fixtures/` (or `$AE3_FIXTURES`); fixture tests skip whatever is missing, and CI fetches the whole list on every platform.
+
+```bash
+scripts/fetch-fixtures.sh
+cargo test --workspace
+```
+
+The `ae3-oracle` crate is development-only and never shipped. Its default tests check every texture format SWGOH uses against pinned statistics and across Platforms. With the `oracle` feature, which builds `unity-rs-core` and needs a C compiler for its zstd, it also decodes every fixture texture with that library and compares pixels:
+
+```bash
+cargo test -p ae3-oracle --features oracle -- --include-ignored
+```
+
 ### Releasing
 
 Releases are cut from conventional commits (`feat:`, `fix:`, `perf:` and so on). On every push to `main`, [release-plz](https://release-plz.dev) opens or updates a release PR that bumps the shared workspace version and adds the new section to `CHANGELOG.md`. Merging that PR tags `vX.Y.Z`, and the tag starts [cargo-dist](https://axodotdev.github.io/cargo-dist/) in `.github/workflows/release.yml`, which builds the archives above and publishes the GitHub Release. Nothing is published to crates.io.
