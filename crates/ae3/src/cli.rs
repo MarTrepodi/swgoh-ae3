@@ -125,14 +125,23 @@ pub enum KindFilter {
 
 #[derive(Debug, Clone, Default, Args)]
 pub struct SearchArgs {
-    /// Case-insensitive substring of an Asset or Bundle name.
+    /// Case-insensitive substring of a display name ("Bossk", "Hunting
+    /// Party"), Asset name or Bundle name.
     pub query: String,
     /// Match Package names only, without building or reading the Asset Index.
     #[arg(long, conflicts_with = "no_update")]
     pub names_only: bool,
-    /// Search the stored Asset Index as it is, without probing new Bundles.
+    /// Search the stored Asset Index and Name Index as they are, without
+    /// probing new Bundles or checking for new gamedata.
     #[arg(long)]
     pub no_update: bool,
+    /// Leave out Game Entities: do not match display names.
+    #[arg(long)]
+    pub no_display_names: bool,
+    /// The language of the display names, by code or name, such as french or
+    /// ja [default: the configured language, else English].
+    #[arg(long, value_name = "LANG")]
+    pub language: Option<ae3_core::Language>,
 }
 
 #[derive(Debug, Clone, Default, Args)]

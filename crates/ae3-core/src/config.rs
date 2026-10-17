@@ -24,6 +24,7 @@
 //! layout = "default"       # default | ae2
 //! skip-existing = false
 //! structured = "combined" # separate | combined | none
+//! language = "ENG_US"      # display names for search; ENG_US, FRE_FR, ...
 //!
 //! [gui]
 //! last-asset-version = 100054
@@ -179,6 +180,28 @@ choice_enum! {
     }
 }
 
+choice_enum! {
+    /// The language of the display names search matches (the Name Index),
+    /// named as the community gamedata names its localization files.
+    Language, "language" {
+        ChsCn => "CHS_CN" | "zh-hans" | "chinese-simplified",
+        ChtCn => "CHT_CN" | "zh-hant" | "chinese-traditional",
+        #[default]
+        EngUs => "ENG_US" | "en" | "english",
+        FreFr => "FRE_FR" | "fr" | "french",
+        GerDe => "GER_DE" | "de" | "german",
+        IndId => "IND_ID" | "id" | "indonesian",
+        ItaIt => "ITA_IT" | "it" | "italian",
+        JpnJp => "JPN_JP" | "ja" | "japanese",
+        KorKr => "KOR_KR" | "ko" | "korean",
+        PorBr => "POR_BR" | "pt" | "portuguese",
+        RusRu => "RUS_RU" | "ru" | "russian",
+        SpaXm => "SPA_XM" | "es" | "spanish",
+        ThaTh => "THA_TH" | "th" | "thai",
+        TurTr => "TUR_TR" | "tr" | "turkish",
+    }
+}
+
 /// A number of bytes, written in files and variables as a plain integer or
 /// with a unit: `5GB`, `500 MB`, `1.5GiB`. KB/MB/GB/TB are powers of 1000;
 /// KiB/MiB/GiB/TiB are powers of 1024.
@@ -308,6 +331,8 @@ pub struct Settings {
     pub structured: Option<StructuredMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_cache: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
 }
 
 /// Every `AE3_*` variable [`Settings::from_env`] reads.
@@ -325,6 +350,7 @@ pub const ENV_VARS: &[&str] = &[
     "AE3_SKIP_EXISTING",
     "AE3_STRUCTURED",
     "AE3_NO_CACHE",
+    "AE3_LANGUAGE",
 ];
 
 fn parse_bool(s: &str) -> Result<bool, String> {
@@ -367,6 +393,7 @@ impl Settings {
             skip_existing: higher.skip_existing.or(self.skip_existing),
             structured: higher.structured.or(self.structured),
             no_cache: higher.no_cache.or(self.no_cache),
+            language: higher.language.or(self.language),
         }
     }
 
@@ -412,6 +439,7 @@ impl Settings {
             skip_existing: get(&lookup, "AE3_SKIP_EXISTING", parse_bool)?,
             structured: get(&lookup, "AE3_STRUCTURED", parsed)?,
             no_cache: get(&lookup, "AE3_NO_CACHE", parse_bool)?,
+            language: get(&lookup, "AE3_LANGUAGE", parsed)?,
         })
     }
 }
@@ -517,6 +545,8 @@ pub struct Config {
     pub structured: StructuredMode,
     /// Download into a throwaway directory instead of the cache.
     pub no_cache: bool,
+    /// The language of the display names search matches.
+    pub language: Language,
 }
 
 impl Default for Config {
@@ -535,6 +565,7 @@ impl Default for Config {
             skip_existing: false,
             structured: StructuredMode::default(),
             no_cache: false,
+            language: Language::default(),
         }
     }
 }
@@ -599,6 +630,9 @@ impl Config {
         if let Some(v) = s.no_cache {
             self.no_cache = v;
         }
+        if let Some(v) = s.language {
+            self.language = v;
+        }
     }
 
     /// Loads the file ([`ConfigFile::path`]) and the environment, and merges
@@ -648,6 +682,19 @@ mod tests {
         assert_eq!(c.layout, Layout::Default);
         assert!(!c.skip_existing && !c.no_cache);
         assert_eq!(c.structured, StructuredMode::Combined);
+        assert_eq!(c.language, Language::EngUs);
+    }
+
+    #[test]
+    fn languages_parse_by_code_or_alias() {
+        assert_eq!("eng_us".parse(), Ok(Language::EngUs));
+        assert_eq!("English".parse(), Ok(Language::EngUs));
+        assert_eq!(" JPN_JP ".parse(), Ok(Language::JpnJp));
+        assert_eq!("pt".parse(), Ok(Language::PorBr));
+        assert_eq!(Language::SpaXm.name(), "SPA_XM");
+        assert!("klingon".parse::<Language>().is_err());
+        let file = ConfigFile::parse("language = \"fre_fr\"").unwrap();
+        assert_eq!(file.settings.language, Some(Language::FreFr));
     }
 
     #[test]
@@ -733,6 +780,7 @@ mod tests {
                 "AE3_AUDIO_FORMAT" => "raw",
                 "AE3_LAYOUT" => "ae2",
                 "AE3_STRUCTURED" => "separate",
+                "AE3_LANGUAGE" => "fr",
                 "AE3_OUTPUT_DIR" | "AE3_CACHE_DIR" => "/x",
                 _ => "true",
             };
@@ -761,6 +809,7 @@ mod tests {
                 skip_existing: Some(true),
                 structured: Some(StructuredMode::Separate),
                 no_cache: Some(false),
+                language: Some(Language::GerDe),
             },
             gui: GuiState {
                 last_asset_version: Some(AssetVersion(100_054)),

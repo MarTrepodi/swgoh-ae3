@@ -69,6 +69,11 @@ impl FixtureCdn {
             .insert(format!("{BASE_URL}{version}/Windows/ETC/{file}"), body);
     }
 
+    /// Serves `body` at any `url`, such as a gamedata file on GitHub.
+    pub fn put_url(&self, url: &str, body: Vec<u8>) {
+        self.extra.lock().unwrap().insert(url.to_owned(), body);
+    }
+
     pub fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
     }

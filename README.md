@@ -11,6 +11,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
 - **Automatic asset version detection.** Finds the latest asset version and content location on every run, and falls back to cached and probed values when the usual source is unavailable.
 - **All three platforms' assets.** Windows, Android and iOS asset sets.
 - **Asset search.** Finds every bundle that contains an asset whose name matches your search, using an index AE3 builds in the background. Building the index reads only as much of each bundle as it takes to list its assets, and later game releases re-check only the bundles that changed. The first build for a platform takes a few minutes.
+- **Display-name search.** `ae3 search` also matches the names players see, such as "Bossk" or "Hunting Party", and lists the matching units, abilities, gear, materials and player portraits above the bundle matches, each with the bundles it uses. The names come from the community [gamedata](https://github.com/swgoh-utils/gamedata) mirror, downloaded once per game data update, in any of the game's languages.
 - **Live preview.** Select a bundle to see its contents right away:
   - textures, with zoom and per-channel views
   - sprite atlases, with each sprite outlined
@@ -87,7 +88,7 @@ ae3 diff 100052 100054 --extract added
 | `ae3 version` | Show the latest asset version and where content is served from |
 | `ae3 manifest` | Download and summarize the manifest for an asset version |
 | `ae3 list` | List bundles and audio packages |
-| `ae3 search <text>` | Find bundles containing assets whose names match |
+| `ae3 search <text>` | Find bundles by display name, asset name or bundle name |
 | `ae3 index` | Build or update the asset index used by search |
 | `ae3 extract` | Export assets from bundles and audio packages |
 | `ae3 diff <old> [new]` | Compare two asset versions (`new` defaults to the latest) |
@@ -118,7 +119,7 @@ ae3 diff 100052 --category charui --summary
 ae3 cache prune --max 2GB
 ```
 
-`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. `--names-only` matches bundle names without the index, and `--no-update` searches the index as it stands. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting`, `--no-padding-restoration` and `--structured combined|separate|none`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
+`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. Above them it lists the game entities (units, abilities, gear, materials and player portraits) whose display names match, best match first, each with the bundles it links to. The display names are rebuilt from the community gamedata on GitHub when it changes, about 25 MB of downloads that leave a cached index of about 0.5 MB; when GitHub is unreachable the cached names are used. `--names-only` matches bundle names and display names without the asset index, `--no-update` searches both indexes as they stand, `--no-display-names` leaves the game entities out, and `--language` picks the display-name language for one search. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting`, `--no-padding-restoration` and `--structured combined|separate|none`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
 
 Structured assets are the MonoBehaviours and other Unity objects that are not images, atlases, meshes, text or audio. A category such as `conquest` holds tens of thousands of them, so by default (`--structured combined`) each bundle's structured assets go into one `{bundle}.structured.json` next to its other files. That file is a JSON object with one member per asset, keyed by the file name the asset would otherwise get (its name, with `_{path id}` added when two assets share a name). Each member holds the asset's `path_id`, `name`, `class_name`, `script_class` and `container_path` when known, and its `data`. `--structured separate` writes one `{asset}.json` per asset instead, as earlier releases did, and `--structured none` skips them. Assets picked with `--path-id` are always written as their own files.
 
@@ -173,9 +174,10 @@ padding-restoration = true
 skip-existing = false
 structured = "combined"       # combined, separate or none
 no-cache = false
+language = "ENG_US"           # display-name search: ENG_US, FRE_FR, GER_DE, JPN_JP, ...
 ```
 
-Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED` and `AE3_NO_CACHE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_NO_CACHE` and `AE3_LANGUAGE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
 
 ## Building from source
 
