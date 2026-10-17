@@ -4,7 +4,8 @@
 //! The window is a library so that `ae3-gui-tests` can drive it headless:
 //! [`Ae3App::frame`] runs one frame of the real [`ui::show`], and
 //! [`Ae3App::with_services`] reaches the network through a transport of the
-//! caller's choosing. The binary in `main.rs` only calls [`run`].
+//! caller's choosing. The binary in `main.rs` only calls [`run`] (or
+//! [`smoke::run`] for the scripted smoke run).
 
 // Pixel sizes (at most 16384) and counts shown as progress or layout are far
 // below the 2^24 that f32 represents exactly.
@@ -17,6 +18,7 @@ pub mod app;
 mod highlight;
 pub mod model;
 pub mod output;
+pub mod smoke;
 pub mod tasks;
 pub mod ui;
 pub mod worker;
