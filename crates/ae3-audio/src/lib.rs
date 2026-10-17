@@ -5,7 +5,9 @@
 //! external sources; sound banks embed further WEMs. This crate enumerates
 //! every WEM as a [`Sound`], reads its RIFF header into a [`WemInfo`], and
 //! converts it: Wwise Vorbis to Ogg Vorbis (via `ww2ogg` plus our own granule
-//! fix-up), PCM to WAV, and everything else to the original `.wem`.
+//! fix-up), PCM and PTADPCM to WAV, and everything else to the original
+//! `.wem`. [`AudioPackage::decode_pcm`] and [`decode_wem`] decode the same
+//! codecs to 16-bit samples ([`Pcm`]) for playback.
 //!
 //! ```no_run
 //! # fn main() -> ae3_audio::Result<()> {
@@ -26,11 +28,15 @@ mod convert;
 mod error;
 mod guard;
 mod package;
+mod pcm;
+mod ptadpcm;
 mod revorb;
+mod wav;
 mod wem;
 
 pub use akpk::Language;
 pub use convert::{Converted, convert_wem};
 pub use error::{Error, Result};
 pub use package::{AudioPackage, MAX_PCK_SIZE, Sound, SoundSource};
+pub use pcm::{Pcm, decode_wem};
 pub use wem::{Codec, WemInfo};

@@ -4,7 +4,8 @@
 //!
 //! Beyond the tiny `audio_dataprimer.wwpkg`, these tests use the Audio
 //! Packages `audio_env_hoth`, `audio_mus_campaign`, `audio_evt_chewbacca`,
-//! `audio_ui_datacrons` and `audio_vo_placeholder` from Asset Version 100054,
+//! `audio_ui_datacrons`, `audio_vo_placeholder`, `audio_ftue` and
+//! `audio_sharedui` (the last two hold PTADPCM) from Asset Version 100054,
 //! downloadable from
 //! `https://eaassets-a.akamaihd.net/assetssw.capitalgames.com/PROD/100054/Windows/ETC/{name}.wwpkg`
 //! into `fixtures/100054/Windows/`.
@@ -12,7 +13,7 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use ae3_audio::{AudioPackage, Codec, SoundSource};
+use ae3_audio::{AudioPackage, Codec, Pcm, SoundSource};
 use lewton::inside_ogg::OggStreamReader;
 
 fn fixture(name: &str) -> Option<Vec<u8>> {
@@ -107,10 +108,24 @@ fn convert_all(name: &str) -> Option<usize> {
                     );
                 }
                 assert!(info.sample_rate > 0);
+                let pcm = package.decode_pcm(sound).unwrap();
+                assert_eq!(
+                    (pcm.channels, pcm.sample_rate),
+                    (info.channels, info.sample_rate)
+                );
+                if let Some(count) = info.sample_count {
+                    assert_eq!(pcm.frames() as u64, count.min(decoded));
+                }
                 oggs += 1;
             }
-            Codec::Pcm => assert_eq!(converted.ext, "wav"),
+            Codec::Pcm | Codec::PtAdpcm => {
+                assert_eq!(converted.ext, "wav");
+                assert!(converted.note.is_none());
+                let pcm = package.decode_pcm(sound).unwrap();
+                assert_eq!(Some(pcm.frames() as u64), info.sample_count);
+            }
             _ => {
+                assert!(package.decode_pcm(sound).is_err());
                 assert_eq!(converted.ext, "wem");
                 assert!(converted.note.is_some());
             }
@@ -201,9 +216,9 @@ fn streamed_sounds_are_listed_with_language_and_size() {
 }
 
 /// Corrupts a real Vorbis WEM byte by byte (header, setup and audio) and
-/// truncates it at many lengths: conversion must return a value or an error,
-/// never panic. In debug builds lewton's unchecked arithmetic overflows on
-/// some of these inputs; the crate contains those panics.
+/// truncates it at many lengths: conversion and decoding must return a value
+/// or an error, never panic. In debug builds lewton's unchecked arithmetic
+/// overflows on some of these inputs; the crate contains those panics.
 #[test]
 fn corrupt_vorbis_never_panics() {
     let Some(bytes) = fixture("audio_ui_datacrons.wwpkg") else {
@@ -231,8 +246,181 @@ fn corrupt_vorbis_never_panics() {
         let at = usize::try_from(next() % wem.len() as u64).unwrap();
         bad[at] ^= 1 << (next() % 8);
         let _ = ae3_audio::convert_wem(&bad);
+        let _ = ae3_audio::decode_wem(&bad);
     }
     for len in (0..wem.len()).step_by(37) {
         let _ = ae3_audio::convert_wem(&wem[..len]);
+        let _ = ae3_audio::decode_wem(&wem[..len]);
     }
+}
+
+fn le16(b: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([b[at], b[at + 1]])
+}
+
+fn le32(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// A count as a float; fixture counts are far below 2^32.
+fn count(n: usize) -> f64 {
+    f64::from(u32::try_from(n).unwrap())
+}
+
+/// The payload offset and length of the first `tag` chunk of a RIFF file.
+fn chunk(riff: &[u8], tag: &[u8]) -> (usize, usize) {
+    let mut at = 12;
+    while at + 8 <= riff.len() {
+        let len = le32(riff, at + 4) as usize;
+        if &riff[at..at + 4] == tag {
+            return (at + 8, len);
+        }
+        at += 8 + len + len % 2;
+    }
+    panic!("no {} chunk", String::from_utf8_lossy(tag));
+}
+
+/// Signal statistics of one channel.
+struct Stats {
+    peak: f64,
+    rms: f64,
+    clipped: f64,
+    /// Mean second-order prediction error inside frames.
+    inner: f64,
+    /// The same at frame starts, where the next frame's header restarts
+    /// from exact samples: a decoder that drifts shows large jumps there.
+    edge: f64,
+}
+
+fn stats(s: &[f64], per_frame: usize) -> Stats {
+    let n = count(s.len());
+    let (mut inner, mut inner_n, mut edge, mut edge_n) = (0f64, 0f64, 0f64, 0f64);
+    for i in 2..s.len() {
+        let error = (s[i] - 2.0 * s[i - 1] + s[i - 2]).abs();
+        match i % per_frame {
+            0 => (edge, edge_n) = (edge + error, edge_n + 1.0),
+            1 => {}
+            _ => (inner, inner_n) = (inner + error, inner_n + 1.0),
+        }
+    }
+    Stats {
+        peak: s.iter().fold(0f64, |m, v| m.max(v.abs())),
+        rms: (s.iter().map(|v| v * v).sum::<f64>() / n).sqrt(),
+        clipped: count(s.iter().filter(|v| v.abs() >= 32767.0).count()) / n,
+        inner: inner / inner_n.max(1.0),
+        edge: edge / edge_n.max(1.0),
+    }
+}
+
+/// Checks that the PTADPCM sounds of an Audio Package convert to plausible
+/// audio, and returns how many it checked.
+fn check_ptadpcm(name: &str) -> Option<usize> {
+    let bytes = fixture(name)?;
+    let package = AudioPackage::open(&bytes).unwrap();
+    let mut checked = 0;
+    for sound in package.sounds() {
+        let info = sound.info.unwrap();
+        if info.codec != Codec::PtAdpcm {
+            continue;
+        }
+        let what = format!("{name}: sound {}", sound.id);
+        let wem = package.sound_slice(sound).unwrap();
+        let converted = package.convert(sound).unwrap();
+        assert_eq!((converted.ext, &converted.note), ("wav", &None), "{what}");
+        let wav = &converted.bytes;
+
+        // A plain 16-bit WAV with the WEM's channels and rate, holding
+        // exactly the samples the header promises.
+        let (fmt, _) = chunk(wav, b"fmt ");
+        assert_eq!(le16(wav, fmt), 1, "{what}: PCM format");
+        assert_eq!(le16(wav, fmt + 2), info.channels);
+        assert_eq!(le32(wav, fmt + 4), info.sample_rate);
+        assert_eq!(le16(wav, fmt + 14), 16);
+        let (data, data_len) = chunk(wav, b"data");
+        let frames = info.sample_count.unwrap();
+        assert_eq!(
+            data_len as u64,
+            frames * u64::from(info.channels) * 2,
+            "{what}"
+        );
+        assert_eq!(data + data_len, wav.len());
+
+        // The length matches the duration the WEM's byte rate implies.
+        let (wem_fmt, _) = chunk(wem, b"fmt ");
+        let (_, wem_data_len) = chunk(wem, b"data");
+        let expected = count(wem_data_len) / f64::from(le32(wem, wem_fmt + 8));
+        let duration = info.duration().unwrap().as_secs_f64();
+        assert!(
+            (duration - expected).abs() < 0.002,
+            "{what}: {duration} s of samples, the byte rate says {expected} s"
+        );
+
+        let pcm: Pcm = package.decode_pcm(sound).unwrap();
+        assert_eq!(
+            (pcm.channels, pcm.sample_rate),
+            (info.channels, info.sample_rate)
+        );
+        assert_eq!(pcm.frames() as u64, frames);
+        assert_eq!(pcm.duration(), info.duration().unwrap());
+        let from_wav: Vec<i16> = wav[data..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&b| i16::from_le_bytes(b))
+            .collect();
+        assert_eq!(from_wav, pcm.samples, "{what}: WAV and PCM agree");
+
+        let frame = usize::from(info.block_align / info.channels);
+        let per_frame = 2 + (frame - 5) * 2;
+        let channels = usize::from(pcm.channels);
+        for channel in 0..channels {
+            let s: Vec<f64> = pcm
+                .samples
+                .iter()
+                .skip(channel)
+                .step_by(channels)
+                .map(|&v| f64::from(v))
+                .collect();
+            let st = stats(&s, per_frame);
+            eprintln!(
+                "{what} ch{channel}: {} samples, peak {}, rms {:.1}, clipped {:.4}%, \
+                 prediction error {:.1} inside frames, {:.1} at frame starts",
+                s.len(),
+                st.peak,
+                st.rms,
+                st.clipped * 100.0,
+                st.inner,
+                st.edge
+            );
+            // Measured on Asset Version 100054: RMS 1,500 to 7,000, at most
+            // 0.04% of samples at full scale, frame-start error at most 1.2
+            // times the in-frame error. Decoding the nibbles in the wrong
+            // order instead clips 2% to 22% of samples and puts the
+            // frame-start error near full scale.
+            assert!(st.rms > 100.0, "{what} ch{channel}: near silence");
+            assert!(st.clipped < 0.001, "{what} ch{channel}: clipping storm");
+            assert!(
+                st.edge < 1.5 * st.inner + 256.0,
+                "{what} ch{channel}: the decoder drifts from the frame headers"
+            );
+        }
+        checked += 1;
+    }
+    Some(checked)
+}
+
+#[test]
+fn ptadpcm_converts_to_plausible_audio() {
+    if let Some(checked) = check_ptadpcm("audio_sharedui.wwpkg") {
+        assert_eq!(checked, 12);
+    }
+    if let Some(checked) = check_ptadpcm("audio_ftue.wwpkg") {
+        assert_eq!(checked, 1);
+    }
+}
+
+#[test]
+fn ptadpcm_packages_convert_fully() {
+    let _ = convert_all("audio_sharedui.wwpkg");
+    let _ = convert_all("audio_ftue.wwpkg");
 }

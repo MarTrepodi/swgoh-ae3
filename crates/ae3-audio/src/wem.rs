@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::bytes::{Endian, Reader, to_usize};
 use crate::error::{Error, Result};
+use crate::ptadpcm;
 
 const CONTEXT: &str = "WEM header";
 
@@ -16,9 +17,11 @@ pub enum Codec {
     Opus,
     /// Linear PCM (tag `0x0001`, or `0xFFFE` extensible); converts to WAV.
     Pcm,
-    /// Wwise IMA ADPCM (tag `0x0002`) or Wwise PTADPCM (tag `0x8311`, which
-    /// 37 SWGOH sounds in Asset Version 100054 use); kept as raw WEM.
+    /// Wwise IMA ADPCM (tag `0x0002`); kept as raw WEM.
     Adpcm,
+    /// Wwise PTADPCM (tag `0x8311`, which 37 SWGOH sounds in Asset Version
+    /// 100054 use); converts to 16-bit WAV.
+    PtAdpcm,
     /// Any other format tag; kept as raw WEM.
     Other(u16),
 }
@@ -31,7 +34,8 @@ impl Codec {
             0xFFFF => Self::WwiseVorbis,
             0x3040 => Self::Opus,
             0x0001 | 0xFFFE => Self::Pcm,
-            0x0002 | 0x8311 => Self::Adpcm,
+            0x0002 => Self::Adpcm,
+            0x8311 => Self::PtAdpcm,
             other => Self::Other(other),
         }
     }
@@ -44,6 +48,7 @@ impl Codec {
             Self::Opus => "Opus",
             Self::Pcm => "PCM",
             Self::Adpcm => "ADPCM",
+            Self::PtAdpcm => "PTADPCM",
             Self::Other(_) => "unknown codec",
         }
     }
@@ -157,6 +162,7 @@ impl WemInfo {
             },
             Codec::Opus if fmt.1 >= 0x1C => u32_at(fmt.0 + 0x18),
             Codec::Pcm if block_align > 0 => Some((data.1 / usize::from(block_align)) as u64),
+            Codec::PtAdpcm => ptadpcm::sample_count(data.1, channels, block_align),
             _ => None,
         };
         Ok(Self {
@@ -184,6 +190,41 @@ impl WemInfo {
             Duration::from_secs(samples / rate)
                 + Duration::from_nanos((samples % rate) * 1_000_000_000 / rate)
         })
+    }
+
+    /// The file extension [`convert_wem`](crate::convert_wem) gives this WEM,
+    /// judged from its header alone: `ogg` for Wwise Vorbis, `wav` for PCM
+    /// and PTADPCM in a layout it converts, otherwise `wem`. A truncated WEM
+    /// stays `wem`. A Vorbis WEM whose conversion fails outright still ends
+    /// up as `wem` with callers that fall back to the raw bytes.
+    #[must_use]
+    pub fn converted_extension(&self) -> &'static str {
+        match self.codec {
+            _ if self.truncated => "wem",
+            Codec::WwiseVorbis => "ogg",
+            Codec::Pcm if self.pcm_layout().is_some() => "wav",
+            Codec::PtAdpcm if self.ptadpcm_frame().is_ok() => "wav",
+            _ => "wem",
+        }
+    }
+
+    /// Bytes per sample of a PCM layout that WAV and [`crate::Pcm`] can hold.
+    pub(crate) fn pcm_layout(&self) -> Option<usize> {
+        let bits = self.bits_per_sample;
+        (bits != 0 && bits.is_multiple_of(8) && bits <= 32 && self.channels > 0)
+            .then_some(usize::from(bits / 8))
+    }
+
+    /// The per-channel frame size of a PTADPCM WEM, or why it cannot be
+    /// decoded.
+    pub(crate) fn ptadpcm_frame(&self) -> Result<usize, String> {
+        if self.bits_per_sample != 4 {
+            return Err(format!(
+                "{} bits per sample instead of 4",
+                self.bits_per_sample
+            ));
+        }
+        ptadpcm::frame_size(self.channels, self.block_align)
     }
 
     /// Whether the WEM is big-endian (RIFX).
@@ -285,7 +326,8 @@ pub(crate) mod tests {
         assert_eq!(Codec::from_format_tag(0x3040), Codec::Opus);
         assert_eq!(Codec::from_format_tag(0xFFFE), Codec::Pcm);
         assert_eq!(Codec::from_format_tag(0x0002), Codec::Adpcm);
-        assert_eq!(Codec::from_format_tag(0x8311), Codec::Adpcm);
+        assert_eq!(Codec::from_format_tag(0x8311), Codec::PtAdpcm);
+        assert_eq!(Codec::PtAdpcm.to_string(), "PTADPCM");
         assert_eq!(
             Codec::from_format_tag(0x1234).to_string(),
             "unknown codec 0x1234"
@@ -294,6 +336,41 @@ pub(crate) mod tests {
         let info = WemInfo::parse(&build_wem(&fmt, &[], &[0; 0x24])).unwrap();
         assert_eq!(info.codec, Codec::Adpcm);
         assert_eq!(info.sample_count, None);
+    }
+
+    #[test]
+    fn counts_ptadpcm_samples_from_whole_blocks() {
+        // Wwise's 0x18-byte fmt: cbSize 6, 2 reserved bytes, channel config.
+        let extra = [6, 0, 0, 0, 0x02, 0x31, 0, 0];
+        let fmt = fmt_chunk(0x8311, 2, 48_000, 0x48, 4, &extra);
+        let info = WemInfo::parse(&build_wem(&fmt, &[], &vec![0; 0x48 * 750 + 7])).unwrap();
+        assert_eq!(info.codec, Codec::PtAdpcm);
+        assert_eq!(info.sample_count, Some(64 * 750));
+        assert_eq!(info.duration(), Some(Duration::from_secs(1)));
+        assert_eq!(info.converted_extension(), "wav");
+        let odd = fmt_chunk(0x8311, 2, 48_000, 0x47, 4, &extra);
+        let info = WemInfo::parse(&build_wem(&odd, &[], &[0; 0x47])).unwrap();
+        assert_eq!(info.sample_count, None);
+        assert_eq!(info.converted_extension(), "wem");
+    }
+
+    #[test]
+    fn predicts_converted_extensions() {
+        let ext = |tag, bits| {
+            let fmt = fmt_chunk(tag, 1, 8000, 2, bits, &[0; 0x32]);
+            WemInfo::parse(&build_wem(&fmt, &[], &[0; 4]))
+                .unwrap()
+                .converted_extension()
+        };
+        assert_eq!(ext(0xFFFF, 0), "ogg");
+        assert_eq!(ext(0x0001, 16), "wav");
+        assert_eq!(ext(0x0001, 12), "wem");
+        assert_eq!(ext(0x3040, 0), "wem");
+        assert_eq!(ext(0x0002, 4), "wem");
+        let fmt = fmt_chunk(1, 1, 8000, 2, 16, &[]);
+        let wem = build_wem(&fmt, &[], &[0; 64]);
+        let head = WemInfo::parse(&wem[..wem.len() - 8]).unwrap();
+        assert_eq!(head.converted_extension(), "wem");
     }
 
     #[test]
