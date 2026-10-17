@@ -1,0 +1,16 @@
+[package]
+name = "ae3-core"
+description = "Fetching, parsing, decoding and export logic shared by the AE3 binaries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

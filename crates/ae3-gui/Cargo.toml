@@ -1,0 +1,33 @@
+[package]
+name = "ae3-gui"
+description = "Graphical SWGOH asset extractor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ae3-core.workspace = true
+# glow (OpenGL) instead of the wgpu default, per ADR-0002.
+eframe = { workspace = true, features = [
+    "accesskit",
+    "clipboard",
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+
+
+# eframe's `wayland` feature does not enable winit's dlopen loading, which would
+# link libwayland at build time. Feature unification switches winit and glutin
+# to dlopen, so the binary still starts on X11-only systems. Client-side
+# decorations give the window a title bar on GNOME/Wayland.
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = [
+    "wayland-csd-adwaita",
+    "wayland-dlopen",
+] }
+
+[lints]
+workspace = true

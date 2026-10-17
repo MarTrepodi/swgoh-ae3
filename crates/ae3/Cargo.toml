@@ -1,0 +1,20 @@
+[package]
+name = "ae3"
+description = "Command-line SWGOH asset extractor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# The HTTP API from swgoh-ae2, served synchronously (ADR-0001, ADR-0004).
+serve = []
+
+[dependencies]
+ae3-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      # Installs the channel and components pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  check:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+          - name: macOS arm64
+            os: macos-latest
+          - name: Linux x86_64
+            os: ubuntu-24.04
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features --locked
+
+      - name: Release build
+        run: cargo build --workspace --release --locked
+
+      # Budgets are in MiB and apply to the default-feature release binaries.
+      - name: Binary size budget
+        shell: bash
+        run: |
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          echo "| Binary | Bytes | Budget |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | ---: | ---: |" >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          check() {
+            local bin="$1" budget=$(( $2 * 1024 * 1024 )) size
+            size=$(wc -c < "target/release/$bin$ext" | tr -d '[:space:]')
+            echo "$bin$ext: $size bytes (budget $budget)"
+            echo "| $bin$ext | $size | $budget |" >> "$GITHUB_STEP_SUMMARY"
+            if (( size > budget )); then
+              echo "::error::$bin$ext is $size bytes, over its $2 MiB budget"
+              status=1
+            fi
+          }
+          check ae3 5
+          check ae3-gui 8
+          exit $status

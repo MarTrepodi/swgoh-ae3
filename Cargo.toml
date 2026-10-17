@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+
+[workspace.dependencies]
+ae3-core = { path = "crates/ae3-core" }
+clap = { version = "4.6", features = ["derive"] }
+eframe = { version = "0.37", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+
+# Release builds are tuned for binary size; the native binaries are the product.
+# opt-level measured on macOS arm64 with the rest of this profile (bytes):
+#   opt-level   ae3         ae3-gui
+#   3           1,811,440   4,188,528
+#   2           1,745,392   3,973,872
+#   "s"         1,514,512   3,413,120
+#   "z"         1,352,288   2,974,832
+# If a CPU-bound decoder crate turns out slow at "z", give that crate a
+# `[profile.release.package.<name>] opt-level = 3` override, not the workspace.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
