@@ -8,6 +8,7 @@ use crate::bank;
 use crate::bytes::to_usize;
 use crate::convert::{Converted, convert_wem};
 use crate::error::{Error, Result};
+use crate::pcm::{Pcm, decode_wem};
 use crate::wem::WemInfo;
 
 /// The largest `.pck` this crate inflates. The biggest SWGOH Audio Package
@@ -202,6 +203,12 @@ impl AudioPackage {
     /// WEM with a note for codecs that are not converted.
     pub fn convert(&self, sound: &Sound) -> Result<Converted> {
         convert_wem(self.slice(sound)?)
+    }
+
+    /// Decodes `sound` to 16-bit samples as [`decode_wem`] does: Wwise
+    /// Vorbis, PCM and PTADPCM.
+    pub fn decode_pcm(&self, sound: &Sound) -> Result<Pcm> {
+        decode_wem(self.slice(sound)?)
     }
 
     fn slice(&self, sound: &Sound) -> Result<&[u8]> {

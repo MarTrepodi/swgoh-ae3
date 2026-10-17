@@ -42,6 +42,15 @@ pub enum Error {
     /// Wwise Vorbis could not be turned into Ogg Vorbis with any codebook set.
     #[error("Wwise Vorbis conversion failed: {0}")]
     Vorbis(String),
+
+    /// The sound cannot be decoded to PCM samples: its codec or layout is
+    /// not supported, or it is a truncated prefetch copy.
+    #[error("cannot decode to PCM: {0}")]
+    Unsupported(String),
+
+    /// Decoding the audio to PCM samples failed part-way.
+    #[error("decoding to PCM failed: {0}")]
+    Decode(String),
 }
 
 /// Shorthand for results whose error is [`Error`].
