@@ -40,18 +40,22 @@ pub fn manifest(app: &mut Ae3App, ui: &mut egui::Ui) {
                     for p in Platform::ALL {
                         ui.selectable_value(&mut platform, p, platform_name(p));
                     }
-                });
+                })
+                .response
+                .accessible_name("Platform");
         });
         if platform != app.config.platform {
             app.change_setting(SettingChange::Platform(platform));
         }
         ui.label("Asset Version");
-        let edit = ui.add_enabled(
-            !busy,
-            egui::TextEdit::singleline(&mut app.model.version_text)
-                .desired_width(72.0)
-                .hint_text("latest"),
-        );
+        let edit = ui
+            .add_enabled(
+                !busy,
+                egui::TextEdit::singleline(&mut app.model.version_text)
+                    .desired_width(72.0)
+                    .hint_text("latest"),
+            )
+            .accessible_name("Asset Version");
         let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if ui
             .add_enabled(!busy, egui::Button::new("Fetch Latest"))
@@ -307,16 +311,24 @@ pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         heading(ui, "Asset Search");
         let mut query = app.model.query.clone();
-        let edit = ui.add_enabled(
-            app.model.manifest.is_some(),
-            egui::TextEdit::singleline(&mut query)
-                .desired_width(260.0)
-                .hint_text("Asset, Bundle or display name"),
-        );
+        let edit = ui
+            .add_enabled(
+                app.model.manifest.is_some(),
+                egui::TextEdit::singleline(&mut query)
+                    .desired_width(260.0)
+                    .hint_text("Asset, Bundle or display name"),
+            )
+            .accessible_name("Asset Search");
         if edit.changed() {
             app.set_query(query);
         }
-        if !app.model.query.is_empty() && ui.small_button("×").on_hover_text("Clear").clicked() {
+        if !app.model.query.is_empty()
+            && ui
+                .small_button("×")
+                .on_hover_text("Clear")
+                .accessible_name("Clear search")
+                .clicked()
+        {
             app.set_query(String::new());
         }
         let searching = app.model.search.is_some();

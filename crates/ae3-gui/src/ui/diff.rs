@@ -23,13 +23,15 @@ pub fn tab(app: &mut Ae3App, ui: &mut egui::Ui) {
             egui::TextEdit::singleline(&mut app.model.diff.old_text)
                 .desired_width(72.0)
                 .hint_text("100052"),
-        );
+        )
+        .accessible_name("Old Asset Version");
         ui.label("New Asset Version");
         ui.add(
             egui::TextEdit::singleline(&mut app.model.diff.new_text)
                 .desired_width(72.0)
                 .hint_text(loaded.map_or_else(|| "loaded".to_owned(), |v| v.to_string())),
-        );
+        )
+        .accessible_name("New Asset Version");
         let busy = app.model.diff.job.is_active();
         if ui
             .add_enabled(!busy && loaded.is_some(), egui::Button::new("Compare"))

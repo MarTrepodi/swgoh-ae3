@@ -144,6 +144,8 @@ fn bundle_grid(app: &mut Ae3App, ui: &mut egui::Ui) {
 )]
 fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
+    // Screen readers (and the UI tests) find a cell by its Asset's name.
+    let response = response.accessible_name(asset.display_name());
     let Some(preview) = &app.model.preview else {
         return false;
     };
@@ -251,6 +253,7 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     if ui
         .new_child(egui::UiBuilder::new().max_rect(check_rect))
         .add(egui::Checkbox::without_text(&mut checked))
+        .accessible_name(format!("Extract {}", asset.display_name()))
         .changed()
         && let Some(preview) = &mut app.model.preview
     {
@@ -333,7 +336,11 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
                 let s = &sounds[row.index()];
                 let mut checked = preview.checked_sounds.contains(&s.id);
                 row.col(|ui| {
-                    if ui.checkbox(&mut checked, "").changed() {
+                    if ui
+                        .checkbox(&mut checked, "")
+                        .accessible_name(format!("Extract {}", s.stem))
+                        .changed()
+                    {
                         toggled = Some(s.id);
                     }
                 });
