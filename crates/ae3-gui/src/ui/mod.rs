@@ -111,7 +111,9 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
                     egui::Panel::right("ae3-preview")
                         .resizable(true)
                         .default_size(440.0)
-                        .size_range(260.0..=1400.0)
+                        // Never more than 60% of the window, whatever the
+                        // pane's contents ask for.
+                        .size_range(260.0..=(ui.available_width() * 0.6).max(260.0))
                         .show(ui, |ui| preview::pane(app, ui));
                 }
                 table::bundles(app, ui);

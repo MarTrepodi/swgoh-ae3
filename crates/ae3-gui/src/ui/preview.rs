@@ -299,12 +299,16 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         .id_salt("sounds")
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        // Every column clips its content. Text wider than an unclipped
+        // column widens the row past the panel, the resizable panel grows
+        // to fit, the remainder column takes the new space, and the pane
+        // creeps across the window a little every frame.
         .column(Column::exact(22.0))
         .column(Column::remainder().at_least(100.0).clip(true))
-        .column(Column::initial(60.0))
-        .column(Column::initial(84.0))
-        .column(Column::initial(64.0))
-        .column(Column::initial(70.0))
+        .column(Column::initial(64.0).clip(true))
+        .column(Column::initial(150.0).clip(true))
+        .column(Column::initial(68.0).clip(true))
+        .column(Column::initial(72.0).clip(true))
         .auto_shrink(false)
         .header(18.0, |mut h| {
             h.col(|_| {});

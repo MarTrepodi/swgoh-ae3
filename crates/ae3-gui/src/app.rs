@@ -1031,6 +1031,56 @@ mod tests {
         frame(&ctx, &mut app);
     }
 
+    /// Opening an Audio Package keeps the preview pane at its own width
+    /// instead of spreading over the Bundles table.
+    #[test]
+    fn audio_preview_keeps_its_width() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let sounds = (0..5_u64)
+            .map(|i| ae3_core::SoundInfo {
+                index: usize::try_from(i).unwrap(),
+                id: 300_573_292 + i,
+                stem: format!("{}", 300_573_292 + i),
+                language: "sfx".into(),
+                source: "stream",
+                size: 50_000,
+                codec: Some("Wwise Vorbis"),
+                channels: Some(2),
+                sample_rate: Some(44_100),
+                duration_secs: Some(7.0),
+            })
+            .collect();
+        let mut preview = crate::model::preview::Preview::new(0, "audio_pkg_under_test".into());
+        preview.set_sounds(sounds);
+        app.model.preview = Some(preview);
+
+        let width = 1600.0;
+        let mut heading_x = None;
+        for _ in 0..10 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(width, 900.0))),
+                ..RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| crate::ui::show(&mut app, ui));
+            output.textures_delta.clear();
+            heading_x = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(t) if t.galley.text() == "audio_pkg_under_test" => {
+                        Some(t.pos.x)
+                    }
+                    _ => None,
+                });
+        }
+        let x = heading_x.expect("the preview heading is painted");
+        assert!(
+            x > width / 2.0,
+            "the preview pane starts at x={x}, covering most of a {width}-wide window"
+        );
+    }
+
     /// Cells in a preview row sit side by side. Each cell's checkbox is
     /// placed with `ui.put`, which used to pull the row's cursor back to
     /// the checkbox, so the next cell was drawn almost on top of this one.
