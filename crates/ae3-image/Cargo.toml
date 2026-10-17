@@ -1,0 +1,21 @@
+[package]
+name = "ae3-image"
+description = "Unity texture decoding and PNG/WebP image encoding for AE3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+image-webp = { version = "0.2.4", default-features = false }
+png = { version = "0.18.1", default-features = false }
+texture2ddecoder = { version = "0.1.2", default-features = false, features = ["alloc"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+# Only for the fixture test's minimal Bundle reader; never linked into binaries.
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-decode"] }
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
