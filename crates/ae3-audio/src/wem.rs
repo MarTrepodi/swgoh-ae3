@@ -16,7 +16,8 @@ pub enum Codec {
     Opus,
     /// Linear PCM (tag `0x0001`, or `0xFFFE` extensible); converts to WAV.
     Pcm,
-    /// Wwise IMA ADPCM (tag `0x0002`); kept as raw WEM.
+    /// Wwise IMA ADPCM (tag `0x0002`) or Wwise PTADPCM (tag `0x8311`, which
+    /// 37 SWGOH sounds in Asset Version 100054 use); kept as raw WEM.
     Adpcm,
     /// Any other format tag; kept as raw WEM.
     Other(u16),
@@ -30,7 +31,7 @@ impl Codec {
             0xFFFF => Self::WwiseVorbis,
             0x3040 => Self::Opus,
             0x0001 | 0xFFFE => Self::Pcm,
-            0x0002 => Self::Adpcm,
+            0x0002 | 0x8311 => Self::Adpcm,
             other => Self::Other(other),
         }
     }
@@ -284,6 +285,7 @@ pub(crate) mod tests {
         assert_eq!(Codec::from_format_tag(0x3040), Codec::Opus);
         assert_eq!(Codec::from_format_tag(0xFFFE), Codec::Pcm);
         assert_eq!(Codec::from_format_tag(0x0002), Codec::Adpcm);
+        assert_eq!(Codec::from_format_tag(0x8311), Codec::Adpcm);
         assert_eq!(
             Codec::from_format_tag(0x1234).to_string(),
             "unknown codec 0x1234"

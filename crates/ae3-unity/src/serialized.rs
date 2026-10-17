@@ -488,6 +488,10 @@ mod tests {
             "unit_details_atlas.bundle",
             "shared_uicontainer.bundle",
             "char_bossk_pre.bundle",
+            // Fonts, meshes, shaders and a 0x0 dynamic font texture.
+            "shared_resourcecontainer.bundle",
+            // PlayableDirectors, whose PropertyName keys nest strings.
+            "conquest_progress_ladder_view.bundle",
         ] {
             let Some(bytes) = fixture(name) else {
                 eprintln!("skipping: fixture {name} not found");

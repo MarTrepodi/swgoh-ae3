@@ -42,4 +42,9 @@ opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
+# Unwind, not abort: a crafted Crunch texture can still panic texture2ddecoder
+# (see ae3-image), and ae3_core::guard contains such a panic to one Asset,
+# sound or Package. Cost measured on macOS arm64 against panic = "abort":
+#   ae3 2,400,096 -> 2,715,248; ae3 --features serve 2,484,288 -> 2,832,656;
+#   ae3-gui 5,090,128 -> 5,637,456 bytes.
+panic = "unwind"

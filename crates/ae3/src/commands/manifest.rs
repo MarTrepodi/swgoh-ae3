@@ -55,7 +55,11 @@ impl Totals {
 struct ManifestOutput<'a> {
     asset_version: u64,
     platform: &'static str,
+    /// The Environment the Manifest was fetched from (the CDN path segment).
     environment: &'a str,
+    /// The Environment name recorded inside the Manifest itself, which is
+    /// the one it was built in (for example STAGE) and may differ.
+    manifest_environment: &'a str,
     manifest_url: String,
     tex_format: &'a str,
     timestamp: u64,
@@ -70,6 +74,7 @@ pub fn run<T: Transport + Send + Sync + 'static>(app: &App<T>, out: &mut dyn Wri
     let location = app.resolve_global()?;
     let platform = app.platform();
     let manifest_url = location.manifest_url(platform);
+    let environment = location.environment.as_str().to_owned();
     let store = app.open_store(location)?;
     let manifest = store.manifest();
 
@@ -99,7 +104,8 @@ pub fn run<T: Transport + Send + Sync + 'static>(app: &App<T>, out: &mut dyn Wri
             &ManifestOutput {
                 asset_version: manifest.asset_version.0,
                 platform: platform.name(),
-                environment: &manifest.environment,
+                environment: &environment,
+                manifest_environment: &manifest.environment,
                 manifest_url,
                 tex_format: &manifest.tex_format,
                 timestamp: manifest.timestamp,
@@ -112,6 +118,7 @@ pub fn run<T: Transport + Send + Sync + 'static>(app: &App<T>, out: &mut dyn Wri
     }
     writeln!(out, "Asset Version   {}", manifest.asset_version)?;
     writeln!(out, "Platform        {platform}")?;
+    writeln!(out, "Environment     {environment}")?;
     writeln!(out, "Manifest        {manifest_url}")?;
     writeln!(
         out,

@@ -81,6 +81,10 @@ pub enum AssetError {
     Dependency { name: String, message: String },
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
+    /// Decoding panicked (a decoder bug or crafted input); the panic was
+    /// contained to this Asset, sound or Package.
+    #[error("{context}: internal error, decoding panicked: {message}")]
+    Panicked { context: String, message: String },
 }
 
 impl AssetError {
@@ -92,6 +96,11 @@ impl AssetError {
     pub(crate) fn unity(package: &str) -> impl FnOnce(ae3_unity::Error) -> Self {
         let package = package.to_owned();
         move |source| Self::Unity { package, source }
+    }
+
+    pub(crate) fn panicked(context: impl Into<String>) -> impl FnOnce(String) -> Self {
+        let context = context.into();
+        move |message| Self::Panicked { context, message }
     }
 
     pub(crate) fn malformed(package: &str, path_id: i64, detail: impl Into<String>) -> Self {

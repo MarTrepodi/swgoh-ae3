@@ -673,3 +673,106 @@ fn unknown_packages_are_rejected_up_front() {
     assert!(category.iter().all(|p| p.category() == "charui"));
     assert!(category.len() > 100);
 }
+
+/// Unity copies `shared_uicontainer`'s `standard_atlas` into every UI Bundle
+/// using it. Its Sprites are cut once, into the texture owner's folder, and
+/// each copy's JSON points there.
+#[test]
+fn atlas_copies_cut_their_shared_texture_once() {
+    let needed = [
+        "ui_holotable_currency_tile.bundle",
+        "ui_holotable_xp_tile.bundle",
+        "shared_uicontainer.bundle",
+    ];
+    let Some(f) = fixture("shared-atlas", &needed) else {
+        return;
+    };
+    let report = export(
+        &f,
+        &packages(&["ui_holotable_currency_tile", "ui_holotable_xp_tile"]),
+        &f.options(),
+    );
+    let shared_dir = f.out("shared/shared_uicontainer/sprites/standard_atlas");
+    let sprites = fs::read_dir(&shared_dir).unwrap().count();
+    assert!(sprites > 100, "{sprites}");
+    let sprite_files = report
+        .written
+        .iter()
+        .filter(|w| w.path.starts_with(&shared_dir))
+        .count();
+    assert_eq!(sprite_files, sprites, "each Sprite is written once");
+    for package in ["ui_holotable_currency_tile", "ui_holotable_xp_tile"] {
+        let sprites_dir = f.out(&format!("ui/{package}/sprites"));
+        assert!(!sprites_dir.join("standard_atlas").exists(), "{package}");
+        let json: serde_json::Value =
+            serde_json::from_slice(&fs::read(sprites_dir.join("standard_atlas.json")).unwrap())
+                .unwrap();
+        let entries = json["sprites"].as_array().unwrap();
+        assert_eq!(entries.len(), sprites, "{package}");
+        for entry in entries {
+            let file = entry["file"].as_str().unwrap();
+            assert!(
+                file.starts_with("../../../shared/shared_uicontainer/sprites/standard_atlas/"),
+                "{file}"
+            );
+            assert!(sprites_dir.join(file).exists(), "{package}: {file}");
+        }
+    }
+}
+
+#[test]
+fn empty_font_textures_are_skipped_not_failed() {
+    let Some(f) = fixture("font", &["shared_resourcecontainer.bundle"]) else {
+        return;
+    };
+    // Dynamic fonts' "Font Texture" Assets are 0x0 until the game fills them.
+    let ids = vec![1_573_470_622_990_004_265, 5_344_022_233_216_171_921];
+    let selection = Selection::Assets {
+        package: "shared_resourcecontainer".to_owned(),
+        path_ids: ids.clone(),
+    };
+    let report = export(&f, &selection, &f.options());
+    assert!(report.written.is_empty(), "{:#?}", report.written);
+    let skipped: Vec<i64> = report
+        .skipped
+        .iter()
+        .filter(|s| {
+            s.asset == "Font Texture"
+                && matches!(&s.reason, SkipReason::Unsupported { detail } if detail.contains("0x0"))
+        })
+        .filter_map(|s| s.path_id)
+        .collect();
+    assert_eq!(skipped.len(), 2, "{:#?}", report.skipped);
+    assert!(ids.iter().all(|id| skipped.contains(id)));
+}
+
+/// Native Unity Sprites packed at fractional positions, one of them reaching
+/// half a pixel past its texture's top edge.
+#[test]
+fn exports_native_sprites_with_fractional_rects() {
+    let Some(f) = fixture("sprites", &["ability_char_plugin_echo_lb2.bundle"]) else {
+        return;
+    };
+    let bundle = f.store.open_bundle("ability_char_plugin_echo_lb2").unwrap();
+    let sprites: Vec<_> = bundle
+        .assets()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == AssetKind::Sprite)
+        .collect();
+    assert!(sprites.len() > 1, "{sprites:?}");
+    for sprite in &sprites {
+        let image = bundle
+            .sprite_image(sprite.path_id)
+            .unwrap_or_else(|e| panic!("{}: {e}", sprite.name));
+        assert!(image.width() > 0 && image.height() > 0);
+    }
+    let report = export(
+        &f,
+        &packages(&["ability_char_plugin_echo_lb2"]),
+        &f.options(),
+    );
+    let figure = f.out("ability/ability_char_plugin_echo_lb2/ECHO_SPCL2_FIGURE_bnw.png");
+    assert_eq!(png_size(&figure), (50, 46));
+    assert!(report.is_success());
+}

@@ -1118,7 +1118,7 @@ impl<'a> BundleView<'a> {
             .ok_or_else(|| AssetError::malformed(package, path_id, "the Sprite has no rect"))?;
         let image = self.decode_texture_at(&self.follow(&self.main_loc(path_id), texture)?)?;
         let (x, y, width, height) = rect
-            .to_top_left(image.height())
+            .to_top_left(image.width(), image.height())
             .ok_or_else(|| AssetError::malformed(package, path_id, "the Sprite rect is invalid"))?;
         ae3_image::crop(&image, x, y, width, height).map_err(|source| AssetError::Image {
             package: package.to_owned(),
@@ -1289,15 +1289,22 @@ impl Rect {
         })
     }
 
-    /// The rect as whole pixels with a top-left origin, in a texture
-    /// `texture_height` pixels tall.
-    fn to_top_left(&self, texture_height: u32) -> Option<(u32, u32, u32, u32)> {
-        let x = whole_pixels(self.x)?;
-        let width = whole_pixels(self.width)?;
-        let height = whole_pixels(self.height)?;
-        let bottom = whole_pixels(self.y)?;
-        let y = texture_height.checked_sub(bottom.checked_add(height)?)?;
-        Some((x, y, width, height))
+    /// The rect as whole pixels `(x, y, width, height)` with a top-left
+    /// origin, in a texture `texture_width` x `texture_height` pixels.
+    /// Partly covered pixels are included. Sprites packed at fractional
+    /// positions can reach up to one pixel past the texture's edge, which is
+    /// clipped; a rect further outside is invalid.
+    fn to_top_left(&self, texture_width: u32, texture_height: u32) -> Option<(u32, u32, u32, u32)> {
+        let edge = |v: f64, max: u32| {
+            let v = whole_pixels(v)?;
+            (v <= max.saturating_add(1)).then_some(v.min(max))
+        };
+        let left = edge(self.x.floor(), texture_width)?;
+        let right = edge((self.x + self.width).ceil(), texture_width)?;
+        let bottom = edge(self.y.floor(), texture_height)?;
+        let top = edge((self.y + self.height).ceil(), texture_height)?;
+        (right > left && top > bottom)
+            .then(|| (left, texture_height - top, right - left, top - bottom))
     }
 }
 
@@ -1409,8 +1416,28 @@ mod tests {
             width: 4.0,
             height: 5.0,
         };
-        assert_eq!(r.to_top_left(16), Some((2, 8, 4, 5)));
-        assert_eq!(r.to_top_left(7), None);
+        assert_eq!(r.to_top_left(16, 16), Some((2, 8, 4, 5)));
+        // One pixel past the top edge is clipped; two is invalid.
+        assert_eq!(r.to_top_left(16, 7), Some((2, 0, 4, 4)));
+        assert_eq!(r.to_top_left(16, 6), None);
+        assert_eq!(r.to_top_left(5, 16), Some((2, 8, 3, 5)));
+        assert_eq!(r.to_top_left(4, 16), None);
+        // A fractional rect, as in ability_char_plugin_echo_lb2: it covers
+        // the partly covered pixels and is clipped to a 128-pixel texture.
+        let fractional = Rect {
+            x: 0.3125,
+            y: 82.5,
+            width: 49.0,
+            height: 46.0,
+        };
+        assert_eq!(fractional.to_top_left(128, 128), Some((0, 0, 50, 46)));
+        let empty = Rect {
+            x: 3.0,
+            y: 3.0,
+            width: 0.0,
+            height: 2.0,
+        };
+        assert_eq!(empty.to_top_left(16, 16), None);
         assert_eq!(whole_pixels(-1.0), None);
         assert_eq!(whole_pixels(f64::NAN), None);
     }

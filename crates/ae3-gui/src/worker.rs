@@ -47,7 +47,9 @@ impl Pool {
                             // Hold the lock only while taking a task.
                             let task = rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
                             match task {
-                                Ok(task) => task(),
+                                // A panicking task must not take its worker
+                                // thread down with it (release builds unwind).
+                                Ok(task) => drop(ae3_core::guard::catch_panic(task)),
                                 Err(_) => break,
                             }
                         }
@@ -163,6 +165,22 @@ mod tests {
         }
         assert_eq!(count.load(Ordering::Relaxed), 50);
         assert!(pool_size() >= 1);
+    }
+
+    #[test]
+    fn a_panicking_task_does_not_stop_its_worker() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let pool = Pool::new(1);
+        pool.spawn(|| panic!("decoder bug"));
+        let c = Arc::clone(&count);
+        pool.spawn(move || {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
+        pool.join();
+        std::panic::set_hook(previous);
+        assert_eq!(count.load(Ordering::Relaxed), 1);
     }
 
     #[test]

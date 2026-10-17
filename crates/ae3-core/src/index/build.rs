@@ -442,7 +442,13 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
                     while self.wait_while_paused(cancel) {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         let Some(package) = jobs.get(i) else { break };
-                        let result = self.probe(package, counters, cancel);
+                        // A prober panic marks this Bundle unreadable
+                        // instead of ending the run.
+                        let result =
+                            crate::guard::catch_panic(|| self.probe(package, counters, cancel))
+                                .unwrap_or_else(|message| {
+                                    Err(Failure::Unreadable(format!("prober panicked: {message}")))
+                                });
                         if tx.send((i, result)).is_err() {
                             break;
                         }
