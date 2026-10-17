@@ -47,6 +47,22 @@ version_group = "ae3"
 name = "ae3-audio"
 version_group = "ae3"
 
+# Development-only crates: never released, tagged or written to the
+# changelog. release = false alone is not enough: release-plz still works
+# out every crate's version, finds the shared vX.Y.Z tag through the
+# workspace git_tag_name and looks the crate up in that tag's tree, which
+# fails for a crate added after the last release. A tag name of their own,
+# which is never created, makes release-plz treat them as unreleased.
+[[package]]
+name = "ae3-oracle"
+release = false
+git_tag_name = "ae3-oracle-v{{ version }}"
+
+[[package]]
+name = "ae3-gui-tests"
+release = false
+git_tag_name = "ae3-gui-tests-v{{ version }}"
+
 [changelog]
 # Commits follow Conventional Commits, `type(scope): summary`, with crate
 # (core, unity, image, audio, cli, gui) or area (ci, release, readme) scopes.
