@@ -34,15 +34,32 @@ pub fn glyph(kind: AssetKind) -> &'static str {
     }
 }
 
+/// How much larger than egui's defaults AE3 draws text: body text is 15
+/// points instead of 12.5.
+pub const TEXT_SCALE: f32 = 1.2;
+
+/// A font size of `base` points at AE3's text scale, for text painted
+/// directly rather than through a text style.
+#[must_use]
+pub fn text_size(base: f32) -> f32 {
+    base * TEXT_SCALE
+}
+
 /// Lets proportional text fall back to Hack, egui's embedded monospace
 /// font, which has the geometric shapes the glyphs use. egui 0.37 ships
 /// its emoji fonts only behind a feature that would add about 740 KB.
+/// Also enlarges every text style by [`TEXT_SCALE`].
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
         family.push("Hack".to_owned());
     }
     ctx.set_fonts(fonts);
+    ctx.all_styles_mut(|style| {
+        for font in style.text_styles.values_mut() {
+            font.size = text_size(font.size);
+        }
+    });
 }
 
 /// A capitalised kind name for labels.
@@ -129,6 +146,24 @@ mod tests {
     use eframe::egui::{FontId, RawInput};
 
     use super::*;
+
+    /// Text is drawn larger than egui's defaults.
+    #[test]
+    fn text_styles_are_enlarged() {
+        let ctx = egui::Context::default();
+        let body = |theme| ctx.style_of(theme).text_styles[&egui::TextStyle::Body].size;
+        let themes = [egui::Theme::Dark, egui::Theme::Light];
+        let before = themes.map(body);
+        install_fonts(&ctx);
+        for (theme, before) in themes.into_iter().zip(before) {
+            let after = body(theme);
+            assert!(
+                (after - before * TEXT_SCALE).abs() < 1e-3,
+                "{before} -> {after}"
+            );
+            assert!(after >= 15.0, "body text is {after} points");
+        }
+    }
 
     /// Every glyph must render with the bundled fonts; a missing glyph
     /// would show as a box.

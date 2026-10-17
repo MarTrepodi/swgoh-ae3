@@ -7,13 +7,13 @@ use ae3_core::AssetInfo;
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, vec2};
 use egui_extras::{Column, TableBuilder};
 
-use super::{error_label, glyph, kind_label, match_color};
+use super::{error_label, glyph, kind_label, match_color, text_size};
 use crate::app::Ae3App;
 use crate::model::preview::{PreviewStatus, has_image, summary};
 use crate::model::table::format_bytes;
 
 const CELL_W: f32 = 124.0;
-const CELL_H: f32 = 158.0;
+const CELL_H: f32 = 166.0;
 const THUMB: f32 = 112.0;
 
 pub fn pane(app: &mut Ae3App, ui: &mut egui::Ui) {
@@ -220,12 +220,12 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
         let name = asset.display_name();
         let text_rect = Rect::from_min_size(
             egui::pos2(rect.min.x + 4.0, thumb_rect.max.y + 4.0),
-            vec2(CELL_W - 8.0, 32.0),
+            vec2(CELL_W - 8.0, 40.0),
         );
         let line = |text: String, size: f32, color: Color32| {
             let mut job = egui::text::LayoutJob::simple_singleline(
                 text,
-                egui::FontId::proportional(size),
+                egui::FontId::proportional(text_size(size)),
                 color,
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(text_rect.width());
@@ -237,7 +237,7 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
             visuals.text_color(),
         );
         painter.galley(
-            egui::pos2(text_rect.min.x, text_rect.min.y + 16.0),
+            egui::pos2(text_rect.min.x, text_rect.min.y + text_size(12.0) + 4.0),
             line(summary(asset), 10.5, visuals.weak_text_color()),
             visuals.weak_text_color(),
         );
