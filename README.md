@@ -82,7 +82,35 @@ ae3 diff 100052 100054 --extract added
 | `ae3 cache` | Inspect or prune the download cache |
 | `ae3 serve` | Run the HTTP API (optional build feature) |
 
-Global options include `--platform`, `--asset-version`, `--output` and `--json`. `--json` gives machine-readable output. Progress is written to stderr, so stdout stays clean for pipes.
+Global options include `--platform`, `--asset-version`, `--output`, `--json`, `-v`/`-q`, `--parallel`, `--cache-dir` and `--no-cache`. `--json` prints one JSON document on stdout, with snake_case keys; when a command fails, that document is `{"error": {...}}`. Progress is written to stderr, so stdout stays clean for pipes. Ctrl-C stops a running batch cleanly, keeping what is already written and indexed. Press it again to quit at once.
+
+More examples:
+
+```bash
+ae3 list --categories
+```
+
+```bash
+ae3 search bossk --names-only
+```
+
+```bash
+ae3 extract charui_bossk --path-id 4712 --image-format webp
+```
+
+```bash
+ae3 diff 100052 --category charui --summary
+```
+
+```bash
+ae3 cache prune --max 2GB
+```
+
+`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle. `--names-only` matches bundle names without the index, and `--no-update` searches the index as it stands. `ae3 extract` also takes `--layout`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing` and `--no-atlas-cutting`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
+
+Exit codes: `0` success, `1` error, `2` invalid arguments or settings, `3` partial failure: some packages or assets in a batch failed, or the batch was cancelled.
+
+`ae3 serve --bind 127.0.0.1:8080` answers swgoh-ae2's routes: `/Asset/list`, `/Asset/listDiff` and `/Asset/single`, with the same parameters (`assetOS` 0 = Windows, 1 = Android, 2 = iOS). Errors come back as JSON with a matching HTTP status.
 
 ### Migrating from swgoh-ae2
 

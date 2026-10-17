@@ -9,12 +9,17 @@ license.workspace = true
 [features]
 default = []
 # The HTTP API from swgoh-ae2, served synchronously (ADR-0001, ADR-0004).
-serve = []
+serve = ["dep:tiny_http"]
 
 [dependencies]
 ae3-core.workspace = true
 clap.workspace = true
+# Ctrl-C (and SIGTERM) set the shared cancellation flag.
+ctrlc = { version = "3.4", default-features = false, features = ["termination"] }
+serde.workspace = true
 serde_json.workspace = true
+# Plain HTTP/1.1 only: no TLS, no async runtime.
+tiny_http = { version = "0.12", default-features = false, optional = true }
 
 [lints]
 workspace = true
