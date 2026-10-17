@@ -12,7 +12,9 @@ pub mod jobs;
 pub mod lru;
 pub mod mesh;
 pub mod preview;
+pub mod release;
 pub mod selection;
+pub mod startup;
 pub mod table;
 pub mod update;
 pub mod viewer;
@@ -27,6 +29,7 @@ use self::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use self::jobs::{Job, ProgressClock, format_duration};
 use self::preview::Preview;
 use self::selection::{ClickModifiers, RowSelection};
+use self::startup::Startup;
 use self::table::{PackageRow, SearchMatches, Sort, TypeFilter, format_bytes, visible_rows};
 use self::update::UpdateCheck;
 
@@ -158,6 +161,11 @@ pub struct Model {
     pub index_job: Job<IndexProgressView>,
     pub coverage: Option<Coverage>,
     pub update: UpdateCheck,
+    /// The Manifest load the window starts by itself.
+    pub startup: Startup,
+    /// What the AE3 release check knows; `None` until it reports, and
+    /// always when `check-for-updates` is off.
+    pub release: Option<release::ReleaseState>,
     pub extract_job: Job<ExtractProgress>,
     pub extract_label: String,
     pub summary: Option<ExtractSummary>,
@@ -165,6 +173,10 @@ pub struct Model {
     pub tab: Tab,
     /// The last error worth showing in the status bar.
     pub notice: Option<String>,
+    /// The dependency Bundles the store parsed for earlier previews (or an
+    /// extraction) are no longer needed; see
+    /// [`Model::take_dependency_release`].
+    dependencies_unused: bool,
 }
 
 impl Model {
@@ -265,11 +277,37 @@ impl Model {
         let Some(row) = self.rows.get(row_id) else {
             return;
         };
+        if self.preview.is_some() {
+            self.dependencies_unused = true;
+        }
         let mut preview = Preview::new(row_id, row.name.clone());
         if let Some(search) = &self.search {
             preview.set_highlighted(search.assets_of(&row.name));
         }
         self.preview = Some(preview);
+    }
+
+    /// Closes the preview (no single row is selected any more).
+    pub fn close_preview(&mut self) {
+        if self.preview.take().is_some() {
+            self.dependencies_unused = true;
+        }
+    }
+
+    /// An extraction ended; the dependencies it parsed can go.
+    pub fn extraction_ended(&mut self) {
+        self.dependencies_unused = true;
+    }
+
+    /// Whether to release the store's parsed dependency Bundles now: once
+    /// after the preview changed or closed or an extraction ended, but never
+    /// while an extraction runs, which would only parse them again.
+    pub fn take_dependency_release(&mut self) -> bool {
+        let release = self.dependencies_unused && !self.extract_job.is_active();
+        if release {
+            self.dependencies_unused = false;
+        }
+        release
     }
 
     /// A preview Bundle opened: what it holds is now known for certain.
@@ -431,6 +469,43 @@ mod tests {
         // Two selected: no preview wanted, so the open one is stale.
         assert!(m.preview_is_stale());
         assert!(m.wanted_preview().is_none());
+    }
+
+    /// Browsing from Bundle to Bundle must not keep every dependency
+    /// Bundle parsed so far: changing or closing the preview releases them,
+    /// once, and an extraction holds the release until it ends.
+    #[test]
+    fn preview_changes_release_dependencies() {
+        let mut m = model();
+        assert!(!m.take_dependency_release(), "nothing to release yet");
+        m.open_preview(0);
+        assert!(
+            !m.take_dependency_release(),
+            "the first preview frees nothing"
+        );
+        m.open_preview(3);
+        assert!(m.take_dependency_release(), "switching Bundles releases");
+        assert!(!m.take_dependency_release(), "only once");
+        m.close_preview();
+        assert!(m.preview.is_none());
+        assert!(m.take_dependency_release(), "closing releases");
+        m.close_preview();
+        assert!(
+            !m.take_dependency_release(),
+            "closing nothing frees nothing"
+        );
+
+        let generation = m.extract_job.start(Instant::now());
+        m.open_preview(0);
+        m.open_preview(1);
+        assert!(
+            !m.take_dependency_release(),
+            "an extraction would parse them again"
+        );
+        assert!(m.extract_job.finish(generation, Ok(false)));
+        m.extraction_ended();
+        assert!(m.take_dependency_release(), "released once it ended");
+        assert!(!m.take_dependency_release());
     }
 
     #[test]

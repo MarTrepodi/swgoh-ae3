@@ -16,6 +16,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::app::Ae3App;
 use crate::model::Tab;
+use crate::model::release::ReleaseVersion;
 
 /// A small glyph for each Asset kind. They come from the Hack font that
 /// egui already embeds (see [`install_fonts`]), so no emoji font is
@@ -93,6 +94,24 @@ pub fn match_color(ui: &egui::Ui) -> Color32 {
     ui.visuals().selection.stroke.color
 }
 
+/// "AE3 vX available", linking to the release page, with a dismiss button.
+/// AE3 never updates itself.
+fn release_notice(app: &mut Ae3App, ui: &mut egui::Ui) {
+    let Some((version, url)) = app.model.release.as_ref().and_then(|state| {
+        state
+            .notice(ReleaseVersion::current())
+            .map(|(version, release)| (version, release.url.clone()))
+    }) else {
+        return;
+    };
+    ui.separator();
+    ui.hyperlink_to(format!("AE3 v{version} available"), url)
+        .on_hover_text("Open the release page to download it");
+    if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+        app.dismiss_release();
+    }
+}
+
 /// Draws the whole window.
 pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
     egui::Panel::top("ae3-top").show(ui, |ui| {
@@ -113,6 +132,7 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut app.model.tab, Tab::Bundles, "Bundles");
             ui.selectable_value(&mut app.model.tab, Tab::Diff, "Diff");
+            release_notice(app, ui);
             if let Some(notice) = app.model.notice.clone() {
                 ui.separator();
                 warn_label(ui, notice);

@@ -178,9 +178,12 @@ structured = "combined"       # combined, separate or none
 mesh-format = "obj"           # obj, glb or both
 no-cache = false
 language = "ENG_US"           # display-name search: ENG_US, FRE_FR, GER_DE, JPN_JP, ...
+check-for-updates = true      # GUI only: look for a new AE3 release once a day
 ```
 
-Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_MESH_FORMAT`, `AE3_NO_CACHE` and `AE3_LANGUAGE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_MESH_FORMAT`, `AE3_NO_CACHE`, `AE3_LANGUAGE` and `AE3_CHECK_FOR_UPDATES`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+
+With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whether a newer AE3 has been published, without slowing the window down, and shows "AE3 vX available" with a link to the release page. It never downloads or installs anything. The CLI never checks.
 
 ## Building from source
 

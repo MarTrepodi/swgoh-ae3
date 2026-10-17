@@ -180,6 +180,8 @@ dependencies = [
  "eframe",
  "egui_extras",
  "rfd",
+ "serde",
+ "serde_json",
  "winit",
 ]
 

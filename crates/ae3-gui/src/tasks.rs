@@ -5,17 +5,18 @@
 //! the generation they were started for and compare it with a shared
 //! counter before each expensive step.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use ae3_core::ae3_image::{self, RgbaImage};
-use ae3_core::http::UreqTransport;
+use ae3_core::http::{Transport, UreqTransport};
+use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
-    ExportOptions, IndexBuilder, IndexProgress, LoadedBundle, PackageCache, PackageKind,
-    PackageStore, Platform, Resolver, SoundInfo, Value,
+    Environment, ExportOptions, IndexBuilder, IndexProgress, LoadedBundle, PackageCache,
+    PackageKind, PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
 };
 use eframe::egui::ColorImage;
 
@@ -24,6 +25,7 @@ use crate::model::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use crate::model::jobs::{Generation, Throttle};
 use crate::model::mesh::MeshPreview;
 use crate::model::preview::THUMBNAIL_PX;
+use crate::model::release::{self, ReleaseState};
 use crate::model::table::SearchMatches;
 use crate::model::viewer::Channels;
 use crate::worker::Outbox;
@@ -116,6 +118,25 @@ pub struct DetailImage {
     pub height: u32,
 }
 
+/// The latest Asset Version, as the startup load found it.
+pub enum Latest {
+    /// Not newer than the cached Manifest the startup opened, so only
+    /// where it is served from.
+    Located(CdnLocation),
+    /// Newer (or nothing was cached): a store over its Manifest.
+    Opened(Store),
+}
+
+impl Latest {
+    #[must_use]
+    pub fn asset_version(&self) -> AssetVersion {
+        match self {
+            Self::Located(location) => location.asset_version,
+            Self::Opened(store) => store.location().asset_version,
+        }
+    }
+}
+
 pub struct IndexOutcome {
     pub index: Arc<AssetIndex>,
     pub cancelled: bool,
@@ -131,6 +152,17 @@ pub enum Msg {
     ManifestLoaded {
         generation: Generation,
         result: Result<Store, String>,
+    },
+    /// The startup load opened the last Asset Version shown from the
+    /// download cache, or found none there.
+    StartupCached {
+        generation: Generation,
+        store: Option<Store>,
+    },
+    /// The startup load resolved the latest Asset Version.
+    StartupLatest {
+        generation: Generation,
+        result: Result<Latest, String>,
     },
     UpdateChecked {
         latest: Option<AssetVersion>,
@@ -186,6 +218,8 @@ pub enum Msg {
         result: Result<(Arc<Diff>, Store), String>,
     },
     ConfigSaved(Result<(), String>),
+    /// What the "AE3 vX available" check knows.
+    ReleaseChecked(ReleaseState),
 }
 
 pub type Mailbox = Outbox<Msg>;
@@ -213,6 +247,78 @@ pub fn load_manifest(
     .resolve(explicit)
     .map_err(|e| e.to_string())?;
     Store::open(cache, location, platform).map_err(|e| e.to_string())
+}
+
+/// Where [`PackageCache`] keeps Manifests under its root:
+/// `manifests/{Environment}/{Platform}/{Asset Version}.data`.
+const CACHED_MANIFESTS_DIR: &str = "manifests";
+
+/// Opens `version`'s Manifest from the download cache without touching the
+/// network, or `None` when it is not cached. The Environment is the one the
+/// cached copy was filed under (the most recent, if several), and the base
+/// URL is built from the one CDN host, as the ADR-0005 fallback does; the
+/// startup load replaces it with the resolved one when that differs.
+pub fn open_cached(
+    services: &Services,
+    platform: Platform,
+    version: AssetVersion,
+) -> Option<Store> {
+    let cache = services.cache().ok()?;
+    let file = format!("{version}.data");
+    let environment = std::fs::read_dir(cache.root().join(CACHED_MANIFESTS_DIR))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let environment = Environment::new(entry.file_name().to_str()?)?;
+            let path = entry.path().join(platform.name()).join(&file);
+            let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+            Some((modified, environment))
+        })
+        .max_by_key(|(modified, _)| *modified)?
+        .1;
+    let location = CdnLocation {
+        asset_version: version,
+        base_url: format!("{CDN_ROOT}{environment}/"),
+        environment,
+        source: VersionSource::Explicit,
+    };
+    // The copy is on disk, so this reads it (a corrupt copy is fetched again).
+    Store::open(cache, location, platform).ok()
+}
+
+/// The startup load: opens `last_shown` from the cache and reports it at
+/// once, then resolves the latest Asset Version and opens its Manifest when
+/// it is newer than what was reported.
+pub fn startup(
+    services: &Services,
+    platform: Platform,
+    last_shown: Option<AssetVersion>,
+    generation: Generation,
+    outbox: &Mailbox,
+) {
+    let cached = last_shown.and_then(|v| open_cached(services, platform, v));
+    let shown = cached.as_ref().map(|s| s.location().asset_version);
+    outbox.send(Msg::StartupCached {
+        generation,
+        store: cached,
+    });
+    let result = services.cache().and_then(|cache| {
+        let location = Resolver::new(
+            cache.downloader().transport(),
+            platform,
+            services.config.effective_cache_dir(),
+        )
+        .resolve(None)
+        .map_err(|e| e.to_string())?;
+        if shown.is_some_and(|v| v >= location.asset_version) {
+            Ok(Latest::Located(location))
+        } else {
+            Store::open(cache, location, platform)
+                .map(Latest::Opened)
+                .map_err(|e| e.to_string())
+        }
+    });
+    outbox.send(Msg::StartupLatest { generation, result });
 }
 
 /// The latest Asset Version, or `None` when it cannot be found right now.
@@ -534,6 +640,54 @@ pub fn diff(
     Ok((Arc::new(diff), new_store))
 }
 
+/// The "AE3 vX available" check: reads the saved state at `path`, asks
+/// GitHub for the latest release when a day has passed since the last
+/// check, and saves the outcome. Failures (a 404 while the repository is
+/// not public, no network, an unwritable cache) are silent.
+pub fn check_release<T: Transport + ?Sized>(
+    transport: &T,
+    path: Option<&Path>,
+    now: u64,
+) -> ReleaseState {
+    let mut state = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| ReleaseState::parse(&text))
+        .unwrap_or_default();
+    if !state.is_due(now) {
+        return state;
+    }
+    let found = release::latest_release_api(release::REPOSITORY)
+        .and_then(|url| transport.get_text(&url).ok())
+        .and_then(|body| release::parse_latest_release(&body, release::REPOSITORY));
+    state.checked(now, found);
+    if let Some(path) = path {
+        save_release_state(&state, path);
+    }
+    state
+}
+
+/// Saves the release-check state, best effort: losing it only means one
+/// more check.
+pub fn save_release_state(state: &ReleaseState, path: &Path) {
+    let tmp = path.with_extension("json.tmp");
+    let saved = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&tmp, state.to_json()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Seconds since the Unix epoch.
+#[must_use]
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Writes the configuration file.
 pub fn save_config(file: &ae3_core::ConfigFile, path: &std::path::Path) -> Result<(), String> {
     file.save(path).map_err(|e| e.to_string())
@@ -719,6 +873,139 @@ mod tests {
         assert!(kinds.contains(AssetKind::Texture));
         assert!(assets.iter().any(|a| a.kind == AssetKind::Texture));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The startup load against the real CDN: with an empty cache it opens
+    /// the latest Manifest; on the next start that Manifest comes from the
+    /// cache and the latest is only located.
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_startup_uses_the_cache_on_the_second_run() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-live-start-{}", std::process::id()));
+        let services = Services::new(Config {
+            cache_dir: Some(dir.clone()),
+            ..Config::default()
+        });
+        let run = |last_shown| {
+            let (outbox, rx) = outbox();
+            startup(&services, Platform::Windows, last_shown, 7, &outbox);
+            let Ok(Msg::StartupCached {
+                generation: 7,
+                store,
+            }) = rx.try_recv()
+            else {
+                panic!("no cached message first");
+            };
+            let Ok(Msg::StartupLatest {
+                generation: 7,
+                result,
+            }) = rx.try_recv()
+            else {
+                panic!("no latest message");
+            };
+            (store, result.unwrap())
+        };
+        let (cached, latest) = run(Some(AssetVersion(100_054)));
+        assert!(cached.is_none(), "the cache starts empty");
+        let Latest::Opened(store) = latest else {
+            panic!("the latest Manifest is opened");
+        };
+        let version = store.location().asset_version;
+        let (cached, latest) = run(Some(version));
+        let cached = cached.expect("the Manifest is cached now");
+        assert_eq!(cached.manifest(), store.manifest());
+        assert_eq!(cached.location().base_url, store.location().base_url);
+        assert!(matches!(latest, Latest::Located(l) if l.asset_version == version));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Answers GitHub's latest-release URL with `body`, or 404 without one,
+    /// and counts the requests.
+    struct FakeGitHub {
+        body: Option<&'static str>,
+        requests: std::cell::Cell<usize>,
+    }
+
+    impl Transport for FakeGitHub {
+        fn get_bytes(&self, url: &str) -> Result<Vec<u8>, ae3_core::http::HttpError> {
+            self.requests.set(self.requests.get() + 1);
+            assert_eq!(
+                url,
+                "https://api.github.com/repos/swgoh-utils/swgoh-ae3/releases/latest"
+            );
+            self.body.map(|b| b.as_bytes().to_vec()).ok_or_else(|| {
+                ae3_core::http::HttpError::Status {
+                    url: url.to_owned(),
+                    status: 404,
+                }
+            })
+        }
+
+        fn get_range(
+            &self,
+            url: &str,
+            _start: u64,
+            _end_inclusive: u64,
+        ) -> Result<ae3_core::http::RangeResponse, ae3_core::http::HttpError> {
+            panic!("unexpected Range request for {url}");
+        }
+
+        fn exists(&self, url: &str) -> Result<bool, ae3_core::http::HttpError> {
+            panic!("unexpected probe of {url}");
+        }
+    }
+
+    #[test]
+    fn release_check_asks_github_once_a_day_and_survives_a_404() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-release-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(ReleaseState::FILE);
+        let day = release::CHECK_INTERVAL.as_secs();
+        let t0 = 1_800_000_000;
+
+        // Not published there yet: silent, but remembered as checked.
+        let missing = FakeGitHub {
+            body: None,
+            requests: std::cell::Cell::new(0),
+        };
+        let state = check_release(&missing, Some(&path), t0);
+        assert_eq!(missing.requests.get(), 1);
+        assert_eq!(state.latest, None);
+        assert_eq!(state.checked_at, Some(t0));
+        assert!(path.exists(), "the check is remembered");
+        check_release(&missing, Some(&path), t0 + day - 1);
+        assert_eq!(missing.requests.get(), 1, "not again the same day");
+
+        let published = FakeGitHub {
+            body: Some(
+                r#"{"tag_name":"v99.0.0","html_url":"https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v99.0.0"}"#,
+            ),
+            requests: std::cell::Cell::new(0),
+        };
+        let state = check_release(&published, Some(&path), t0 + day);
+        assert_eq!(published.requests.get(), 1);
+        let (version, found) = state.notice(release::ReleaseVersion::current()).unwrap();
+        assert_eq!(version.major, 99);
+        assert!(found.url.ends_with("/v99.0.0"));
+        // The next start shows it without asking.
+        let again = check_release(&published, Some(&path), t0 + day + 60);
+        assert_eq!(published.requests.get(), 1);
+        assert_eq!(again, state);
+
+        // Without a cache directory nothing is remembered, but it works.
+        let state = check_release(&published, None, t0);
+        assert!(state.latest.is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Asks the real GitHub. While the repository is not public there the
+    /// answer is a 404, which must leave no notice and no error.
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_release_check_is_quiet() {
+        let state = check_release(&UreqTransport::new(), None, unix_now());
+        assert!(state.checked_at.is_some());
+        eprintln!("latest release: {:?}", state.latest);
     }
 
     #[test]

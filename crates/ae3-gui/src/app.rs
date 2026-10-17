@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use ae3_core::config::{AudioFormat, ImageFormat, Layout};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, MeshFormat, StructuredMode};
 use ae3_core::{AssetIndex, AssetInfo, AssetVersion, Config, ConfigFile, ExportOptions, Platform};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
@@ -18,6 +18,8 @@ use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
 use crate::model::mesh::OrbitCamera;
+use crate::model::release::ReleaseState;
+use crate::model::startup::LatestDecision;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::{Channels, ViewTransform};
 use crate::tasks::{self, DetailContent, Mailbox, Msg, Opened, Services, Store};
@@ -68,6 +70,8 @@ pub enum SettingChange {
     AudioFormat(AudioFormat),
     Layout(Layout),
     SkipExisting(bool),
+    Structured(StructuredMode),
+    MeshFormat(MeshFormat),
 }
 
 pub struct Ae3App {
@@ -85,6 +89,9 @@ pub struct Ae3App {
     index_pause: Arc<AtomicBool>,
     index_cancel: Arc<AtomicBool>,
     index_thread: Option<JoinHandle<()>>,
+    /// Whether a loaded Manifest starts an Asset Index build; tests turn
+    /// it off to stay offline.
+    index_on_load: bool,
     /// The query a background search is running for, and whether another
     /// is wanted after it.
     search_in_flight: bool,
@@ -119,15 +126,13 @@ impl Ae3App {
         crate::ui::install_fonts(ctx);
         let repaint = ctx.clone();
         let (outbox, inbox) = Outbox::new(move || repaint.request_repaint());
-        let model = Model {
-            notice,
-            version_text: config_file
-                .gui
-                .last_asset_version
-                .map(|v| v.to_string())
-                .unwrap_or_default(),
-            ..Model::default()
-        };
+        let mut model = Model::default();
+        model.notice = notice;
+        model.version_text = config_file
+            .gui
+            .last_asset_version
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         Self {
             model,
             services: Arc::new(Services::new(config.clone())),
@@ -143,6 +148,7 @@ impl Ae3App {
             index_pause: Arc::new(AtomicBool::new(false)),
             index_cancel: Arc::new(AtomicBool::new(false)),
             index_thread: None,
+            index_on_load: true,
             search_in_flight: false,
             search_wanted: false,
             preview_generation: Arc::new(AtomicU64::new(0)),
@@ -163,13 +169,187 @@ impl Ae3App {
         }
     }
 
+    /// Starts what the window does by itself: loading the latest Manifest
+    /// and, unless turned off, looking for a newer AE3 release. Kept out of
+    /// [`Ae3App::new`] so tests build an app that stays offline.
+    pub fn start(&mut self) {
+        self.start_up();
+        if self.config.check_for_updates {
+            self.start_release_check();
+        }
+    }
+
+    // ---- AE3 release notice --------------------------------------------
+
+    /// Where the release check remembers its last answer.
+    fn release_state_path(&self) -> Option<PathBuf> {
+        self.services
+            .config
+            .effective_cache_dir()
+            .map(|dir| dir.join(ReleaseState::FILE))
+    }
+
+    /// Looks for a newer AE3 release on a thread of its own; GitHub is
+    /// asked at most once a day.
+    fn start_release_check(&mut self) {
+        let path = self.release_state_path();
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-release-check", move || {
+            let transport = ae3_core::http::UreqTransport::new();
+            let state = tasks::check_release(&transport, path.as_deref(), tasks::unix_now());
+            outbox.send(Msg::ReleaseChecked(state));
+        });
+    }
+
+    /// Hides the "AE3 vX available" notice until a later release.
+    pub fn dismiss_release(&mut self) {
+        let path = self.release_state_path();
+        let Some(state) = &mut self.model.release else {
+            return;
+        };
+        state.dismiss();
+        if let Some(path) = path {
+            let state = state.clone();
+            self.pool
+                .spawn(move || tasks::save_release_state(&state, &path));
+        }
+    }
+
     // ---- Manifest -------------------------------------------------------
+
+    /// The startup load: the last Asset Version shown, from the cache, at
+    /// once; then the latest (ADR-0005). The UI never waits for either.
+    fn start_up(&mut self) {
+        if self.model.manifest_job.is_active() {
+            return;
+        }
+        let generation = self.begin_startup();
+        let last_shown = self.config_file.gui.last_asset_version;
+        let services = Arc::clone(&self.services);
+        let platform = self.config.platform;
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-startup", move || {
+            tasks::startup(&services, platform, last_shown, generation, &outbox);
+        });
+    }
+
+    /// Starts the startup load's Manifest job; its messages carry the
+    /// generation returned.
+    fn begin_startup(&mut self) -> u64 {
+        let generation = self.model.manifest_job.start(Instant::now());
+        self.model.startup.begin(generation);
+        self.model.manifest_job.update(
+            generation,
+            match self.config_file.gui.last_asset_version {
+                Some(v) => format!("Opening Asset Version {v}…"),
+                None => "Finding the latest Asset Version…".to_owned(),
+            },
+        );
+        generation
+    }
+
+    /// The startup load's cached Manifest arrived (or there was none).
+    fn startup_cached(&mut self, generation: u64, store: Option<Store>) {
+        if !self.model.startup.is_for(generation) {
+            return;
+        }
+        match store {
+            Some(store) => {
+                if self.model.manifest_job.finish(generation, Ok(false)) {
+                    self.last_load_error = None;
+                    self.manifest_loaded(store);
+                }
+            }
+            None => {
+                self.model
+                    .manifest_job
+                    .update(generation, "Finding the latest Asset Version…".to_owned());
+            }
+        }
+    }
+
+    /// The startup load resolved the latest Asset Version.
+    fn startup_latest(&mut self, generation: u64, result: Result<tasks::Latest, String>) {
+        let job = &self.model.manifest_job;
+        if job.is_active() && job.generation() == generation {
+            // Nothing was cached: this is the window's first Manifest.
+            self.model.startup.abandon();
+            let outcome = result.as_ref().map(|_| false).map_err(Clone::clone);
+            if self.model.manifest_job.finish(generation, outcome) {
+                match result {
+                    Ok(tasks::Latest::Opened(store)) => {
+                        self.last_load_error = None;
+                        self.manifest_loaded(store);
+                    }
+                    Ok(tasks::Latest::Located(_)) => {}
+                    Err(e) => self.last_load_error = Some(e),
+                }
+            }
+            return;
+        }
+        let shown = self.model.asset_version();
+        let latest = match result {
+            Ok(latest) => latest,
+            Err(e) => {
+                if self.model.startup.is_for(generation) {
+                    self.model.startup.abandon();
+                    if let Some(v) = shown {
+                        self.model.notice = Some(format!(
+                            "Showing Asset Version {v} from the cache; the latest could not be found: {e}"
+                        ));
+                    }
+                }
+                return;
+            }
+        };
+        let version = latest.asset_version();
+        let extracting = self.model.extract_job.is_active();
+        match (
+            self.model
+                .startup
+                .decide(generation, shown, version, extracting),
+            latest,
+        ) {
+            (LatestDecision::Show, tasks::Latest::Opened(store)) => self.manifest_loaded(store),
+            (LatestDecision::Keep, tasks::Latest::Located(location)) => {
+                self.adopt_location(location);
+            }
+            (LatestDecision::Offer, _) => self.model.update.finished(Some(version)),
+            _ => {}
+        }
+    }
+
+    /// The cached Manifest's base URL was built rather than resolved; use
+    /// the resolved one if it differs. The Manifest itself is unchanged.
+    fn adopt_location(&mut self, location: ae3_core::CdnLocation) {
+        let Some(store) = &self.store else { return };
+        let current = store.location();
+        if current.asset_version != location.asset_version
+            || (current.base_url == location.base_url
+                && current.environment == location.environment)
+        {
+            return;
+        }
+        let store = Store::new(
+            Arc::clone(store.cache()),
+            location,
+            store.platform(),
+            store.shared_manifest(),
+        );
+        self.store = Some(store);
+        // The running build probes through the old location.
+        if self.model.index_job.is_active() {
+            self.stop_index();
+            self.start_index();
+        }
+    }
 
     /// Resolves and loads a Manifest: the latest when `version` is `None`.
     pub fn load_manifest(&mut self, version: Option<AssetVersion>) {
         if self.model.manifest_job.is_active() {
             return;
         }
+        self.model.startup.abandon();
         let generation = self.model.manifest_job.start(Instant::now());
         self.model.manifest_job.update(
             generation,
@@ -201,7 +381,9 @@ impl Ae3App {
             self.config_dirty_since = Some(Instant::now());
         }
         self.store = Some(store);
-        self.start_index();
+        if self.index_on_load {
+            self.start_index();
+        }
     }
 
     fn check_for_update(&mut self, now: Instant) {
@@ -320,7 +502,8 @@ impl Ae3App {
         }
         self.clear_preview_resources();
         let Some(row) = self.model.wanted_preview().cloned() else {
-            self.model.preview = None;
+            self.model.close_preview();
+            self.release_unused_dependencies();
             return;
         };
         let Some(store) = self.store.clone() else {
@@ -328,11 +511,23 @@ impl Ae3App {
         };
         let generation = self.preview_generation.load(Ordering::Relaxed);
         self.model.open_preview(row.id);
+        // Before the new preview starts parsing its own dependencies.
+        self.release_unused_dependencies();
         let current = Arc::clone(&self.preview_generation);
         let outbox = self.outbox.clone();
         self.pool.spawn(move || {
             tasks::open_package(&store, &row.name, row.kind, generation, &current, &outbox);
         });
+    }
+
+    /// Drops the dependency Bundles the stores keep parsed once the model
+    /// says nothing needs them, so memory does not grow while browsing.
+    fn release_unused_dependencies(&mut self) {
+        if self.model.take_dependency_release() {
+            for store in [&self.store, &self.diff_store].into_iter().flatten() {
+                store.release_dependencies();
+            }
+        }
     }
 
     /// Asks for a thumbnail of the preview's Asset `path_id`; decoded in
@@ -564,6 +759,8 @@ impl Ae3App {
             SettingChange::Platform(v) => {
                 self.config.platform = v;
                 s.platform = Some(v);
+                // The startup load is for the Platform it started with.
+                self.model.startup.abandon();
             }
             SettingChange::ImageFormat(v) => {
                 self.config.image_format = v;
@@ -588,6 +785,14 @@ impl Ae3App {
             SettingChange::SkipExisting(v) => {
                 self.config.skip_existing = v;
                 s.skip_existing = Some(v);
+            }
+            SettingChange::Structured(v) => {
+                self.config.structured = v;
+                s.structured = Some(v);
+            }
+            SettingChange::MeshFormat(v) => {
+                self.config.mesh_format = v;
+                s.mesh_format = Some(v);
             }
         }
         self.config_dirty_since = Some(Instant::now());
@@ -628,6 +833,8 @@ impl Ae3App {
                     }
                 }
             }
+            Msg::StartupCached { generation, store } => self.startup_cached(generation, store),
+            Msg::StartupLatest { generation, result } => self.startup_latest(generation, result),
             Msg::UpdateChecked { latest } => self.model.update.finished(latest),
             Msg::IndexSnapshot { generation, index } => {
                 if generation == self.model.index_job.generation() {
@@ -690,6 +897,8 @@ impl Ae3App {
                 if self.model.extract_job.finish(generation, outcome) {
                     self.extract_cancel = None;
                     self.model.summary = Some(summary);
+                    self.model.extraction_ended();
+                    self.release_unused_dependencies();
                 }
             }
             Msg::DiffDone { generation, result } => {
@@ -701,6 +910,7 @@ impl Ae3App {
                     self.diff_store = Some(store);
                 }
             }
+            Msg::ReleaseChecked(state) => self.model.release = Some(state),
             Msg::ConfigSaved(result) => {
                 if let Err(e) = result {
                     self.model.notice = Some(format!("Could not save settings: {e}"));
@@ -830,8 +1040,17 @@ impl Ae3App {
     }
 }
 
-impl eframe::App for Ae3App {
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+/// Repaint policy: the window repaints only when something changed. Worker
+/// messages wake it ([`Outbox`]; progress at most every
+/// [`tasks::PROGRESS_INTERVAL`]), input wakes it, and the only timers are the
+/// Asset Version recheck (focused windows, every 15 minutes) and the
+/// settings save a second after a change. Nothing animates while idle:
+/// spinners are drawn only while a short job runs that the user waits for,
+/// and the progress bars are not animated. `idle_frames_schedule_no_repaint`
+/// checks this.
+impl Ae3App {
+    /// The per-frame work outside drawing: messages, timers, saving.
+    fn tick(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.inbox.try_recv() {
             self.handle(ctx, msg);
         }
@@ -853,6 +1072,20 @@ impl eframe::App for Ae3App {
             }
         }
         self.drop_closed_detail();
+    }
+
+    /// Draws the window and acts on what the drawing changed.
+    fn draw(&mut self, ui: &mut egui::Ui) {
+        crate::ui::show(self, ui);
+        // Selection changes made while drawing take effect here.
+        self.sync_preview();
+        self.flush_thumbnail_requests();
+    }
+}
+
+impl eframe::App for Ae3App {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.tick(ctx);
         // GPU buffers are kept only while a Mesh is on screen.
         let showing_mesh = matches!(
             &self.detail,
@@ -867,10 +1100,7 @@ impl eframe::App for Ae3App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        crate::ui::show(self, ui);
-        // Selection changes made while drawing take effect here.
-        self.sync_preview();
-        self.flush_thumbnail_requests();
+        self.draw(ui);
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
@@ -948,6 +1178,460 @@ mod tests {
             }
             frame(ctx, app);
         }
+    }
+
+    /// A download cache in the temporary directory, removed on drop.
+    struct TempCache(PathBuf);
+
+    impl TempCache {
+        /// With the fixture Manifest filed as Asset Version 100054 of
+        /// Windows in the PROD Environment, as `PackageCache` files it.
+        fn with_manifest(name: &str, manifest: Option<&Path>) -> Self {
+            let dir = std::env::temp_dir().join(format!("ae3-gui-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            if let Some(manifest) = manifest {
+                let target = dir.join("manifests/PROD/Windows");
+                std::fs::create_dir_all(&target).unwrap();
+                std::fs::copy(manifest, target.join("100054.data")).unwrap();
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempCache {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// An offline app over `cache` that last showed `last_shown`, with its
+    /// startup load begun; returns the load's generation.
+    fn starting_app(
+        ctx: &egui::Context,
+        cache: &TempCache,
+        last_shown: Option<AssetVersion>,
+    ) -> (Ae3App, u64) {
+        let config = Config {
+            cache_dir: Some(cache.0.clone()),
+            ..Config::default()
+        };
+        let mut file = ConfigFile::default();
+        file.gui.last_asset_version = last_shown;
+        let mut app = Ae3App::new(ctx, config, file, None, None);
+        app.index_on_load = false;
+        let generation = app.begin_startup();
+        (app, generation)
+    }
+
+    /// A store over the fixture Manifest relabelled as Asset Version
+    /// `version`, as if the CDN had published it.
+    fn published(app: &Ae3App, version: u64) -> Store {
+        let cached = app.store.as_ref().expect("a cached Manifest is shown");
+        let mut manifest = cached.manifest().clone();
+        manifest.asset_version = AssetVersion(version);
+        let location = ae3_core::CdnLocation {
+            asset_version: AssetVersion(version),
+            ..cached.location().clone()
+        };
+        Store::new(
+            Arc::clone(cached.cache()),
+            location,
+            Platform::Windows,
+            manifest,
+        )
+    }
+
+    #[test]
+    fn startup_opens_the_cached_manifest_then_switches_to_a_newer_one() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-newer", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        assert!(app.model.manifest_job.is_active());
+
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054))
+            .expect("the cached Manifest opens without the network");
+        assert_eq!(cached.location().environment.as_str(), "PROD");
+        assert!(
+            tasks::open_cached(&app.services, Platform::Android, AssetVersion(100_054)).is_none()
+        );
+        assert!(
+            tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_053)).is_none()
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: Some(cached),
+            },
+        );
+        assert!(!app.model.manifest_job.is_active(), "usable at once");
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert!(app.model.startup.is_pending());
+        frame(&ctx, &mut app);
+
+        let newer = published(&app, 100_055);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Opened(newer)),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_055)));
+        assert_eq!(app.model.version_text, "100055");
+        assert!(!app.model.startup.is_pending());
+        assert_eq!(app.model.update.newer(), None);
+        assert_eq!(
+            app.config_file.gui.last_asset_version,
+            Some(AssetVersion(100_055)),
+            "remembered for the next start"
+        );
+        frame(&ctx, &mut app);
+    }
+
+    #[test]
+    fn startup_only_offers_a_newer_version_once_the_user_moved_on() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-offer", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        // The user picks another Platform before the latest arrives.
+        app.change_setting(SettingChange::Platform(Platform::Android));
+        let newer = published(&app, 100_055);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Opened(newer)),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert_eq!(app.model.update.newer(), Some(AssetVersion(100_055)));
+    }
+
+    #[test]
+    fn startup_keeps_the_cached_manifest_when_offline() {
+        let Some(dir) = fixtures() else { return };
+        let cache = TempCache::with_manifest("startup-offline", Some(&dir.join("manifest.data")));
+        let ctx = egui::Context::default();
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Err("no network".into()),
+            },
+        );
+        assert_eq!(app.model.asset_version(), Some(AssetVersion(100_054)));
+        assert!(!app.model.startup.is_pending());
+        assert!(app.last_load_error.is_none());
+        assert!(
+            app.model
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no network")),
+            "{:?}",
+            app.model.notice
+        );
+
+        // The same version resolved: the resolved location is adopted and
+        // nothing is reloaded.
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        let cached = tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054));
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: cached,
+            },
+        );
+        app.model.click_row(0, ClickModifiers::default());
+        let location = ae3_core::CdnLocation {
+            base_url: "https://mirror.invalid/PROD/".into(),
+            ..app.store.as_ref().unwrap().location().clone()
+        };
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Ok(tasks::Latest::Located(location)),
+            },
+        );
+        assert_eq!(app.model.selection.len(), 1, "the table was not reset");
+        assert_eq!(
+            app.store.as_ref().unwrap().location().base_url,
+            "https://mirror.invalid/PROD/"
+        );
+    }
+
+    /// Runs a few whole frames (as eframe does: `tick`, then `draw`) a
+    /// quarter second apart, so egui's own short animations (a scroll bar
+    /// appearing) end, and returns the repaint delay the last one asked
+    /// for: `Duration::MAX` when nothing is scheduled, zero for a
+    /// continuous repaint.
+    fn settled_repaint_delay(ctx: &egui::Context, app: &mut Ae3App) -> Duration {
+        let mut delay = Duration::ZERO;
+        for _ in 0..6 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1280.0, 860.0))),
+                time: Some(ctx.cumulative_frame_nr() as f64 * 0.25),
+                ..RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                app.tick(ui.ctx());
+                app.draw(ui);
+            });
+            output.textures_delta.clear();
+            delay = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map_or(Duration::MAX, |v| v.repaint_delay);
+        }
+        delay
+    }
+
+    /// The window idles at no CPU: once a frame has settled, nothing asks
+    /// for another before the 15-minute Asset Version recheck, whether
+    /// nothing is loaded, a Manifest is shown, the Asset Index builds,
+    /// pauses or has finished, the startup load looks for a newer Asset
+    /// Version, or an extraction runs between progress messages.
+    /// Longer than any wait a settled window may schedule, short of the
+    /// Asset Version recheck.
+    const IDLE: Duration = Duration::from_secs(60);
+
+    /// An offline app showing a small made-up Manifest.
+    fn app_with_manifest(ctx: &egui::Context) -> Ae3App {
+        let mut app = Ae3App::new(ctx, Config::default(), ConfigFile::default(), None, None);
+        app.index_on_load = false;
+        let package = |name: &str, kind| ae3_core::Package {
+            name: name.into(),
+            kind,
+            size: 1000,
+            ..ae3_core::Package::default()
+        };
+        let manifest = Manifest {
+            asset_version: AssetVersion(100_054),
+            packages: (0..50)
+                .map(|i| package(&format!("charui_{i}"), ae3_core::PackageKind::Bundle))
+                .chain([package("audio_x", ae3_core::PackageKind::AudioPackage)])
+                .collect(),
+            ..Manifest::default()
+        };
+        app.model.set_manifest(Arc::new(manifest), Instant::now());
+        app
+    }
+
+    #[test]
+    fn idle_frames_schedule_no_repaint() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "empty window"
+        );
+
+        let mut app = app_with_manifest(&ctx);
+        let now = Instant::now();
+        let delay = settled_repaint_delay(&ctx, &mut app);
+        assert!(
+            delay >= IDLE && delay <= crate::model::update::RECHECK_INTERVAL,
+            "Manifest shown: {delay:?}"
+        );
+
+        // The startup load still resolving the latest shows no spinner.
+        let generation = app.begin_startup();
+        assert!(app.model.manifest_job.finish(generation, Ok(false)));
+        assert!(app.model.startup.is_pending());
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "startup check"
+        );
+        app.model.startup.abandon();
+
+        let generation = app.model.index_job.start(now);
+        app.model.index_job.update(
+            generation,
+            crate::model::IndexProgressView {
+                done: 10,
+                total: 51,
+                bytes_fetched: 1 << 20,
+                ..Default::default()
+            },
+        );
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "index building"
+        );
+
+        // A progress message wakes the window once, then it idles again.
+        app.outbox.send(Msg::IndexProgress {
+            generation,
+            view: crate::model::IndexProgressView {
+                done: 11,
+                total: 51,
+                ..Default::default()
+            },
+            paused: false,
+        });
+        assert!(ctx.has_requested_repaint(), "the message woke the window");
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE);
+        assert_eq!(app.model.index_job.progress().done, 11);
+
+        assert!(app.model.index_job.set_paused(generation, true, now));
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "index paused"
+        );
+        assert!(app.model.index_job.finish(generation, Ok(false)));
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE, "index done");
+
+        let extraction = app.model.extract_job.start(now);
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE, "extracting");
+        assert!(app.model.extract_job.finish(extraction, Ok(false)));
+
+        // A spinner, by contrast, repaints continuously while its job runs:
+        // the checks above would catch one left on screen.
+        app.model.manifest_job.start(now);
+        assert_eq!(settled_repaint_delay(&ctx, &mut app), Duration::ZERO);
+    }
+
+    /// A Bundle preview waiting for thumbnails draws placeholders, not
+    /// spinners, so it idles too.
+    #[test]
+    fn an_idle_preview_schedules_no_repaint() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_manifest(&ctx);
+        let id = app.model.rows[0].id;
+        app.model.click_row(id, ClickModifiers::default());
+        app.model.open_preview(id);
+        let asset = |path_id: i64, kind| AssetInfo {
+            path_id,
+            name: format!("asset_{path_id}"),
+            class_name: "Texture2D".into(),
+            script_class: None,
+            kind,
+            byte_size: 100,
+            texture: None,
+            sprite_count: None,
+            container_path: None,
+        };
+        if let Some(preview) = &mut app.model.preview {
+            preview.set_assets(vec![
+                asset(1, AssetKind::Texture),
+                asset(2, AssetKind::Structured),
+                asset(3, AssetKind::Mesh),
+            ]);
+        }
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "Bundle preview"
+        );
+        assert!(app.model.preview.is_some(), "the preview stayed open");
+    }
+
+    /// Every text painted in one frame.
+    fn painted_texts(ctx: &egui::Context, app: &mut Ae3App) -> Vec<String> {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1600.0, 900.0))),
+            ..RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| crate::ui::show(app, ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn release_notice_links_to_the_release_and_stays_dismissed() {
+        let cache = TempCache::with_manifest("release-notice", None);
+        let ctx = egui::Context::default();
+        let config = Config {
+            cache_dir: Some(cache.0.clone()),
+            ..Config::default()
+        };
+        let mut app = Ae3App::new(&ctx, config, ConfigFile::default(), None, None);
+        let notice = "AE3 v99.0.0 available";
+        assert!(!painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+        let mut state = ReleaseState::default();
+        state.checked(
+            1,
+            Some(crate::model::release::Release {
+                tag: "v99.0.0".into(),
+                url: "https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v99.0.0".into(),
+            }),
+        );
+        app.handle(&ctx, Msg::ReleaseChecked(state));
+        assert!(painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+
+        app.dismiss_release();
+        assert!(!painted_texts(&ctx, &mut app).iter().any(|t| t == notice));
+        let path = cache.0.join(ReleaseState::FILE);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !path.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let saved = ReleaseState::parse(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(
+            saved.dismissed.as_deref(),
+            Some("v99.0.0"),
+            "kept for the next start"
+        );
+    }
+
+    #[test]
+    fn startup_without_a_cached_manifest_waits_for_the_latest() {
+        let ctx = egui::Context::default();
+        let cache = TempCache::with_manifest("startup-empty", None);
+        let (mut app, generation) = starting_app(&ctx, &cache, Some(AssetVersion(100_054)));
+        assert!(
+            tasks::open_cached(&app.services, Platform::Windows, AssetVersion(100_054)).is_none()
+        );
+        app.handle(
+            &ctx,
+            Msg::StartupCached {
+                generation,
+                store: None,
+            },
+        );
+        assert!(app.model.manifest_job.is_active());
+        assert_eq!(
+            app.model.manifest_job.progress(),
+            "Finding the latest Asset Version…"
+        );
+        frame(&ctx, &mut app);
+        app.handle(
+            &ctx,
+            Msg::StartupLatest {
+                generation,
+                result: Err("offline".into()),
+            },
+        );
+        assert!(!app.model.manifest_job.is_active());
+        assert_eq!(app.last_load_error.as_deref(), Some("offline"));
+        assert!(!app.model.startup.is_pending());
     }
 
     /// The whole window renders headless: the Manifest table, a fixture
@@ -1029,6 +1713,42 @@ mod tests {
         // The Diff tab renders without a Diff.
         app.model.tab = crate::model::Tab::Diff;
         frame(&ctx, &mut app);
+    }
+
+    /// The Output section's Structured Asset choice reaches the export
+    /// options and the settings file.
+    #[test]
+    fn structured_mode_setting_reaches_exports() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let mode = |app: &Ae3App| ExportOptions::from_config(&app.config).structured;
+        assert_eq!(mode(&app), StructuredMode::Combined);
+        app.change_setting(SettingChange::Structured(StructuredMode::Separate));
+        assert_eq!(mode(&app), StructuredMode::Separate);
+        assert_eq!(
+            app.config_file.settings.structured,
+            Some(StructuredMode::Separate)
+        );
+        assert!(app.config_dirty_since.is_some(), "saved shortly");
+        frame(&ctx, &mut app);
+    }
+
+    /// So does the Mesh format choice.
+    #[test]
+    fn mesh_format_setting_reaches_exports() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let format = |app: &Ae3App| ExportOptions::from_config(&app.config).mesh_format;
+        assert_eq!(format(&app), MeshFormat::Obj);
+        app.change_setting(SettingChange::MeshFormat(MeshFormat::Both));
+        assert_eq!(format(&app), MeshFormat::Both);
+        assert_eq!(app.config_file.settings.mesh_format, Some(MeshFormat::Both));
+        assert!(
+            painted_texts(&ctx, &mut app)
+                .iter()
+                .any(|t| t == "Meshes: OBJ + glb"),
+            "the Output section shows the choice"
+        );
     }
 
     /// Opening an Audio Package keeps the preview pane at its own width
