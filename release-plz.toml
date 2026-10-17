@@ -1,0 +1,70 @@
+# release-plz: on every push to main, .github/workflows/release-plz.yml
+# opens (or updates) a release PR that bumps the shared workspace version and
+# writes CHANGELOG.md from conventional commits. Merging that PR pushes a
+# `vX.Y.Z` tag, which starts cargo-dist's release.yml. Nothing is published
+# to crates.io, and dist, not release-plz, creates the GitHub Release.
+[workspace]
+# Versions come from the vX.Y.Z git tags, not a registry.
+git_only = true
+repo_url = "https://github.com/swgoh-utils/swgoh-ae3"
+git_tag_name = "v{{ version }}"
+# Only the ae3 package below tags; one tag releases every binary.
+git_tag_enable = false
+git_release_enable = false
+changelog_update = false
+# Release only when the release PR is merged, not on every push.
+release_always = false
+semver_check = false
+dependencies_update = false
+pr_labels = ["release"]
+
+# All crates share [workspace.package] version and move together.
+[[package]]
+name = "ae3"
+version_group = "ae3"
+git_tag_enable = true
+changelog_update = true
+changelog_path = "CHANGELOG.md"
+changelog_include = ["ae3-audio", "ae3-core", "ae3-gui", "ae3-image", "ae3-unity"]
+
+[[package]]
+name = "ae3-gui"
+version_group = "ae3"
+
+[[package]]
+name = "ae3-core"
+version_group = "ae3"
+
+[[package]]
+name = "ae3-unity"
+version_group = "ae3"
+
+[[package]]
+name = "ae3-image"
+version_group = "ae3"
+
+[[package]]
+name = "ae3-audio"
+version_group = "ae3"
+
+[changelog]
+# Commits follow Conventional Commits, `type(scope): summary`, with crate
+# (core, unity, image, audio, cli, gui) or area (ci, release, readme) scopes.
+# Chores, CI, build, test and style commits stay out of the changelog.
+protect_breaking_commits = true
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^revert", group = "Reverted" },
+    { message = "^(chore|ci|build|test|style)", skip = true },
+    # Merge commits repeat the commits they merge.
+    { message = "^Merge ", skip = true },
+    # History before the convention (up to 0.1.0, whose section in
+    # CHANGELOG.md is written by hand) used plain imperative summaries.
+    { message = "^(Add|Scaffold)\\b", group = "Added" },
+    { message = "^Fix\\b", group = "Fixed" },
+    { message = ".*", group = "Changed" },
+]

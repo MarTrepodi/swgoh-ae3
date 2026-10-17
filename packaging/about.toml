@@ -1,0 +1,28 @@
+# cargo-about: writes THIRD-PARTY-LICENSES.md for the release archives.
+#   cargo fetch --locked && cargo about generate --workspace --frozen --fail \
+#     -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
+# Only the licenses the release dependency graph uses today; a new one fails
+# the release build until it is reviewed and added here.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "Zlib",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+# The release targets, so every archive gets the same file.
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+workarounds = ["ring", "rustls"]

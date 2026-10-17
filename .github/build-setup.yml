@@ -1,0 +1,14 @@
+# Steps cargo-dist runs in each build-local-artifacts job, right after
+# checkout (github-build-setup in Cargo.toml). The archives include the
+# generated THIRD-PARTY-LICENSES.md, so it must exist before `dist build`.
+# --frozen after the fetch keeps cargo-about offline, so every runner writes
+# the same file.
+- name: Install cargo-about
+  uses: taiki-e/install-action@v2
+  with:
+    tool: cargo-about@0.9.2
+- name: Generate THIRD-PARTY-LICENSES.md
+  shell: bash
+  run: |
+    cargo fetch --locked
+    cargo about generate --workspace --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs

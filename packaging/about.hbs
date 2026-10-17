@@ -1,0 +1,25 @@
+# Third-party licenses
+
+AE3 is MIT-licensed. The release binaries are built from the Rust crates
+below, under the licenses that follow. THIRD-PARTY-NOTICES.md covers the
+Wwise Vorbis codebooks, which are data rather than a crate.
+
+| License | Crates |
+| --- | ---: |
+{{#each overview}}
+| {{{name}}} | {{count}} |
+{{/each}}
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by:
+{{#each used_by}}
+- [{{crate.name}} {{crate.version}}]({{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}})
+{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}
