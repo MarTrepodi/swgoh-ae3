@@ -232,6 +232,10 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 `release.yml` is generated: change `[workspace.metadata.dist]` in `Cargo.toml`, then run `dist generate`. Pull requests run `dist plan` to check the release config.
 
+## Contributing
+
+Bug reports, feature ideas and pull requests are welcome. Read the [contributing guide](.github/CONTRIBUTING.md) for setup, checks and commit conventions, and the [Code of Conduct](.github/CODE_OF_CONDUCT.md). Report security problems privately as described in the [security policy](.github/SECURITY.md).
+
 ## License
 
 AE3 is released under the [MIT License](LICENSE). Third-party components keep their own licenses, which are reproduced in each release. These include the BSD-3-Clause Wwise Vorbis codebooks from ww2ogg.

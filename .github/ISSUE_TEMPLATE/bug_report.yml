@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in ae3 or ae3-gui does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please don't attach extracted game assets, Bundles or Audio Packages; name the Bundle and Asset Version instead. Security problems go through the [security policy](https://github.com/swgoh-utils/swgoh-ae3/security/policy), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact command (with flags), or the clicks in the GUI.
+      placeholder: |
+        1. ae3 extract charui_bossk --output ./assets
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Which tool?
+      options:
+        - ae3 (command line)
+        - ae3-gui (desktop app)
+        - ae3 serve (HTTP API)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AE3 version
+      description: Output of `ae3 --version`, or the release you downloaded.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple silicon)
+        - Windows x86_64
+        - Linux x86_64
+        - Linux aarch64
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: asset-version
+    attributes:
+      label: Asset Version and Platform
+      description: The game content release and asset set involved, if any (see `ae3 version`).
+      placeholder: 100054, Windows
+  - type: input
+    id: packages
+    attributes:
+      label: Bundles or Audio Packages involved
+      placeholder: unit_details_atlas, audio_evt_jedirevan
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs
+      description: Error messages or output, ideally with `-v`. Screenshots help for GUI problems.
+      render: text
