@@ -4,9 +4,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -17,9 +17,11 @@ use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
+use crate::model::mesh::OrbitCamera;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::{Channels, ViewTransform};
 use crate::tasks::{self, DetailContent, Mailbox, Msg, Opened, Services, Store};
+use crate::ui::mesh::{self, MeshRenderer};
 use crate::worker::{Outbox, Pool, pool_size, spawn_long};
 
 /// Budget for decoded textures held on the GPU (thumbnails and previews).
@@ -51,6 +53,8 @@ pub struct Detail {
     /// Channels of the uploaded texture (a remask may be in flight).
     pub shown_channels: Channels,
     pub selected_sprite: Option<usize>,
+    /// The 3D view's camera, for a Mesh.
+    pub camera: OrbitCamera,
     pub open: bool,
 }
 
@@ -94,6 +98,8 @@ pub struct Ae3App {
     thumb_queue: Vec<i64>,
     pub detail: Option<Detail>,
     detail_counter: u64,
+    /// Draws the detail viewer's Mesh; shared with its paint callback.
+    pub mesh_renderer: Arc<Mutex<MeshRenderer>>,
     extract_cancel: Option<Arc<AtomicBool>>,
     pub diff_store: Option<Store>,
     checker: Option<TextureHandle>,
@@ -148,6 +154,7 @@ impl Ae3App {
             thumb_queue: Vec::new(),
             detail: None,
             detail_counter: 0,
+            mesh_renderer: Arc::default(),
             extract_cancel: None,
             diff_store: None,
             checker: None,
@@ -401,6 +408,7 @@ impl Ae3App {
             channels: Channels::ALL,
             shown_channels: Channels::ALL,
             selected_sprite: None,
+            camera: OrbitCamera::default(),
             open: true,
         });
         let bundle = Arc::clone(bundle);
@@ -823,7 +831,7 @@ impl Ae3App {
 }
 
 impl eframe::App for Ae3App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         while let Ok(msg) = self.inbox.try_recv() {
             self.handle(ctx, msg);
         }
@@ -845,6 +853,17 @@ impl eframe::App for Ae3App {
             }
         }
         self.drop_closed_detail();
+        // GPU buffers are kept only while a Mesh is on screen.
+        let showing_mesh = matches!(
+            &self.detail,
+            Some(Detail {
+                content: Some(Ok(DetailContent::Mesh(_))),
+                ..
+            })
+        );
+        if !showing_mesh && let Some(gl) = frame.gl() {
+            mesh::lock(&self.mesh_renderer).release_mesh(gl);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -854,7 +873,10 @@ impl eframe::App for Ae3App {
         self.flush_thumbnail_requests();
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let Some(gl) = gl {
+            mesh::lock(&self.mesh_renderer).destroy(gl);
+        }
         if self.config_dirty_since.is_some()
             && let Some(path) = &self.config_path
         {

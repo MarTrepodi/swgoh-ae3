@@ -22,6 +22,7 @@ use eframe::egui::ColorImage;
 use crate::model::IndexProgressView;
 use crate::model::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use crate::model::jobs::{Generation, Throttle};
+use crate::model::mesh::MeshPreview;
 use crate::model::preview::THUMBNAIL_PX;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::Channels;
@@ -97,6 +98,8 @@ pub enum DetailContent {
         extension: &'static str,
         truncated: bool,
     },
+    /// A Mesh, ready to upload for the 3D view.
+    Mesh(Arc<MeshPreview>),
     /// Nothing to show beyond a description.
     Info(String),
 }
@@ -446,7 +449,10 @@ pub fn detail(
                 clip.extension
             ))
         }
-        AssetKind::Structured | AssetKind::Mesh | AssetKind::Other => {
+        AssetKind::Mesh => {
+            DetailContent::Mesh(Arc::new(MeshPreview::new(&view.mesh(id).map_err(err)?)))
+        }
+        AssetKind::Structured | AssetKind::Other => {
             if asset.byte_size > MAX_TREE_BYTES {
                 DetailContent::Info(format!(
                     "{} is {}, too large to browse as a tree. Extract it as JSON instead.",
@@ -640,6 +646,40 @@ mod tests {
             detail(&bundle, data, 16384).unwrap(),
             DetailContent::Tree(_) | DetailContent::Info(_)
         ));
+    }
+
+    #[test]
+    fn detail_prepares_meshes_for_the_3d_view() {
+        let Some(path) = fixture("char_bossk_pre.bundle") else {
+            return;
+        };
+        let bundle = LoadedBundle::open_file(&path).unwrap();
+        let assets = bundle.assets().unwrap();
+        let mesh = assets
+            .iter()
+            .find(|a| a.kind == AssetKind::Mesh && a.name == "bossk_mesh")
+            .unwrap();
+        match detail(&bundle, mesh, 16384).unwrap() {
+            DetailContent::Mesh(preview) => {
+                assert_eq!(preview.vertex_count, 1693);
+                assert_eq!(preview.triangle_count, 2502);
+                assert_eq!(preview.vertices.len(), 1693 * 6);
+                assert_eq!(preview.indices.len(), 2502 * 3);
+                assert!(preview.has_normals && preview.has_uvs);
+                // Bossk stands about 1.9 units tall around y = 0.94.
+                assert!(
+                    (preview.center[1] - 0.935).abs() < 0.01,
+                    "{:?}",
+                    preview.center
+                );
+                assert!(
+                    preview.radius > 0.9 && preview.radius < 1.2,
+                    "{}",
+                    preview.radius
+                );
+            }
+            _ => panic!("expected a mesh"),
+        }
     }
 
     /// Resolves the latest Asset Version on the real CDN, loads its

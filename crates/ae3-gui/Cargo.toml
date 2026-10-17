@@ -33,5 +33,13 @@ winit = { version = "0.30", default-features = false, features = [
     "wayland-dlopen",
 ] }
 
-[lints]
-workspace = true
+# The workspace lints, except that unsafe code is denied rather than
+# forbidden: the 3D Mesh view (src/ui/mesh.rs) calls OpenGL through glow,
+# whose bindings are all `unsafe`, and allows it in that module alone.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
