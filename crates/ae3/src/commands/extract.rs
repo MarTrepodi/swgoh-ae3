@@ -131,6 +131,11 @@ fn report_problems<T>(app: &App<T>, report: &ExportReport) {
     }
 }
 
+/// `n` followed by the singular or plural noun.
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 /// Prints the summary of an export.
 pub fn write_summary(
     out: &mut dyn Write,
@@ -140,21 +145,30 @@ pub fn write_summary(
 ) -> Result<(), CliError> {
     writeln!(
         out,
-        "Wrote {} files ({}) from {} of {packages} Packages to {}",
-        report.written.len(),
+        "Wrote {} ({}) from {} of {} to {}",
+        count(report.written.len(), "file", "files"),
         human_bytes(report.bytes_written()),
         report.packages_done,
+        count(packages, "Package", "Packages"),
         output_dir.display()
     )?;
     if !report.skipped.is_empty() {
         writeln!(
             out,
-            "Skipped {} Assets (-v lists them)",
-            report.skipped.len()
+            "Skipped {} (-v lists them)",
+            count(report.skipped.len(), "Asset", "Assets")
         )?;
     }
     if !report.errors.is_empty() {
-        writeln!(out, "Failed {} Assets or Packages", report.errors.len())?;
+        writeln!(
+            out,
+            "Failed {}",
+            count(
+                report.errors.len(),
+                "Asset or Package",
+                "Assets or Packages"
+            )
+        )?;
     }
     if report.cancelled {
         writeln!(out, "Cancelled before finishing")?;
@@ -209,6 +223,30 @@ mod tests {
             panic!("not extract");
         };
         selection(&args)
+    }
+
+    #[test]
+    fn summary_counts_agree_in_number() {
+        let report = ExportReport {
+            packages_done: 1,
+            written: vec![ae3_core::WrittenFile {
+                path: "x.png".into(),
+                package: "p".into(),
+                asset: "x".into(),
+                bytes: 10,
+                note: None,
+            }],
+            ..ExportReport::default()
+        };
+        let mut out = Vec::new();
+        write_summary(&mut out, &report, 1, Path::new("o")).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.starts_with("Wrote 1 file (10 B) from 1 of 1 Package to o"),
+            "{text}"
+        );
+        assert_eq!(count(2, "file", "files"), "2 files");
+        assert_eq!(count(0, "file", "files"), "0 files");
     }
 
     #[test]

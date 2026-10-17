@@ -102,8 +102,17 @@ fn manifest_summary() {
         bundles + audio + json["other_packages"].as_u64().unwrap()
     );
     assert!(json.get("saved_to").is_none());
+    // The Environment is the CDN's, not the build Environment the Manifest
+    // records about itself.
+    assert_eq!(json["environment"], "PROD", "{json}");
+    assert!(json["manifest_environment"].is_string(), "{json}");
 
     let text = h.run("ae3 manifest");
+    assert!(
+        text.stdout.contains("Environment     PROD"),
+        "{}",
+        text.stdout
+    );
     assert!(
         text.stdout.contains("Asset Version   100054"),
         "{}",

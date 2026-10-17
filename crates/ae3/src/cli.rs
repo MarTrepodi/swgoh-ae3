@@ -458,6 +458,7 @@ mod tests {
                 .replace("<text>", "bossk")
                 .replace("<old>", "100052")
                 .replace("<new>", "100054")
+                .replace("[new]", "100054")
                 .replace("<current>", "100054")
                 .replace("<bundle>", "charui_bossk")
                 .replace("<prefix>", "charui")
@@ -483,6 +484,28 @@ mod tests {
             "found only {} README commands",
             commands.len()
         );
+    }
+
+    /// The README's sample configuration file parses and sets every key,
+    /// and the README names every `AE3_*` variable.
+    #[test]
+    fn readme_config_example_parses() {
+        let readme = include_str!("../../../README.md");
+        let fence = "```toml\n";
+        let start = readme.find(fence).expect("a toml block") + fence.len();
+        let end = start + readme[start..].find("```").expect("a closed toml block");
+        let file = ae3_core::ConfigFile::parse(&readme[start..end]).expect("README config");
+        let keys = serde_json::to_value(&file.settings).unwrap();
+        let keys = keys.as_object().unwrap();
+        assert_eq!(
+            keys.len(),
+            ae3_core::config::ENV_VARS.len(),
+            "README config sets only {:?}",
+            keys.keys().collect::<Vec<_>>()
+        );
+        for var in ae3_core::config::ENV_VARS {
+            assert!(readme.contains(var), "README does not mention {var}");
+        }
     }
 
     #[test]
