@@ -196,12 +196,16 @@ fn search_names_only_needs_no_index() {
             "coverage",
             "entities",
             "hits",
+            "name_index",
             "names_only",
             "platform",
             "query"
         ]
     );
     assert_eq!(json["names_only"], true);
+    // The fixture CDN has no gamedata mirror: no Game Entities, no failure.
+    assert_eq!(json["name_index"]["status"], "unavailable");
+    assert_eq!(json["entities"].as_array().unwrap().len(), 0);
     let hits = json["hits"].as_array().unwrap();
     let bossk = hits
         .iter()
@@ -247,9 +251,117 @@ fn search_builds_the_index_then_finds_assets() {
     let before = h.cdn.requests().len();
     let text = h.run("ae3 search tex.charui_bossk");
     assert!(matches!(text.result, Ok(Status::Success)));
-    assert_eq!(h.cdn.requests().len(), before + 1, "only meta.json");
+    assert_eq!(
+        h.cdn.requests().len(),
+        before + 2,
+        "only meta.json and the gamedata versions"
+    );
     assert!(text.stdout.starts_with("charui_bossk\n"), "{}", text.stdout);
     assert!(text.stdout.contains("texture"), "{}", text.stdout);
+}
+
+/// A Name Index cached for the gamedata version the mirror reports, so
+/// search uses it without downloading gamedata.
+fn install_name_index(h: &Harness) {
+    use ae3_core::names::{GAMEDATA_URL, VERSIONS_FILE, default_name_index_path};
+    use ae3_core::{EntityKind, GameEntity, GamedataVersions, Language, NameIndex};
+    let versions = GamedataVersions {
+        gamedata: "g1".into(),
+        localization: "l1".into(),
+    };
+    h.cdn.put_url(
+        &format!("{GAMEDATA_URL}{VERSIONS_FILE}"),
+        br#"{"gameVersion":"g1","localeVersion":"l1"}"#.to_vec(),
+    );
+    let entity = |kind, id: &str, name: &str, context: Option<&str>, bundles: &[&str]| GameEntity {
+        kind,
+        id: id.into(),
+        name: name.into(),
+        context: context.map(str::to_owned),
+        bundles: bundles.iter().map(|&b| b.to_owned()).collect(),
+    };
+    NameIndex::new(
+        Language::EngUs,
+        versions,
+        vec![
+            entity(
+                EntityKind::Unit,
+                "BOSSK",
+                "Bossk",
+                None,
+                &["charui_bossk", "char_bossk_pre", "not_in_the_manifest"],
+            ),
+            entity(
+                EntityKind::Ability,
+                "specialability_bossk01",
+                "Hunting Party",
+                Some("Bossk"),
+                &["missing_icon"],
+            ),
+        ],
+    )
+    .save(&default_name_index_path(h.cache.path(), Language::EngUs))
+    .unwrap();
+}
+
+#[test]
+fn search_lists_game_entities_first() {
+    let dir = require_fixtures!();
+    let h = Harness::new(Some(dir));
+    install_name_index(&h);
+
+    let json = h.run("ae3 search bossk --names-only --json").json();
+    assert_eq!(json["name_index"]["status"], "current");
+    assert_eq!(json["name_index"]["language"], "ENG_US");
+    assert_eq!(json["name_index"]["gamedata_version"], "g1");
+    let entities = json["entities"].as_array().unwrap();
+    assert_eq!(entities.len(), 1, "{json}");
+    assert_eq!(
+        keys(&entities[0]),
+        ["bundles", "id", "kind", "name", "rank"]
+    );
+    assert_eq!(entities[0]["kind"], "unit");
+    assert_eq!(entities[0]["rank"], "exact");
+    assert_eq!(
+        entities[0]["bundles"],
+        serde_json::json!(["charui_bossk", "char_bossk_pre"])
+    );
+    assert_ne!(json["hits"].as_array().unwrap().len(), 0);
+    // No gamedata was downloaded: the cached index is current.
+    assert!(!h.cdn.requests().iter().any(|u| u.ends_with("ability.json")));
+
+    let text = h.run("ae3 search bossk --names-only");
+    assert!(
+        text.stdout
+            .starts_with("Game Entities\n  Unit  Bossk: charui_bossk, char_bossk_pre\n\nBundles\n"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stdout.contains("\ncharui_bossk\n"), "{}", text.stdout);
+
+    let text = h.run("ae3 search hunting --names-only");
+    assert_eq!(
+        text.stdout,
+        "Game Entities\n  Ability  Hunting Party (Bossk): no linked Bundle in this Manifest\n"
+    );
+
+    // --no-update uses the cache unchecked; --no-display-names skips it.
+    let before = h.cdn.requests().len();
+    let json = h.run("ae3 search bossk --no-update --json").json();
+    assert_eq!(json["name_index"]["status"], "unchecked");
+    assert_eq!(h.cdn.requests().len(), before + 1, "only meta.json");
+    let json = h
+        .run("ae3 search bossk --names-only --no-display-names --json")
+        .json();
+    assert_eq!(json["name_index"], Value::Null);
+    assert_eq!(json["entities"].as_array().unwrap().len(), 0);
+
+    // Another language has no index cached.
+    let json = h
+        .run("ae3 search bossk --names-only --language fr --json")
+        .json();
+    assert_eq!(json["name_index"]["language"], "FRE_FR");
+    assert_eq!(json["name_index"]["status"], "unavailable");
 }
 
 #[test]
