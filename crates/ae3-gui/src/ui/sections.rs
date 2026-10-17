@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use ae3_core::Platform;
-use ae3_core::config::{AudioFormat, ImageFormat, Layout};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, StructuredMode};
 use eframe::egui::{self, RichText};
 
 use super::{error_label, warn_label};
@@ -172,6 +172,8 @@ pub fn output(app: &mut Ae3App, ui: &mut egui::Ui) {
             app.change_setting(SettingChange::AudioFormat(audio));
         }
 
+        structured_choice(app, ui);
+
         let mut layout = app.config.layout;
         egui::ComboBox::from_id_salt("layout")
             .selected_text(layout_label(layout))
@@ -208,6 +210,47 @@ fn audio_label(f: AudioFormat) -> &'static str {
     match f {
         AudioFormat::Ogg => "Ogg Vorbis",
         AudioFormat::Raw => "Raw (Wwise)",
+    }
+}
+
+/// How whole-Bundle extractions write Structured Assets.
+fn structured_choice(app: &mut Ae3App, ui: &mut egui::Ui) {
+    let mut structured = app.config.structured;
+    egui::ComboBox::from_id_salt("structured")
+        .selected_text(structured_label(structured))
+        .show_ui(ui, |ui| {
+            for &m in StructuredMode::ALL {
+                ui.selectable_value(&mut structured, m, structured_label(m))
+                    .on_hover_text(structured_tip(m));
+            }
+        })
+        .response
+        .on_hover_text(
+            "How whole-Bundle extractions write Structured Assets (MonoBehaviours and \
+             other data). Assets checked in the preview are always written as their own files.",
+        );
+    if structured != app.config.structured {
+        app.change_setting(SettingChange::Structured(structured));
+    }
+}
+
+fn structured_label(m: StructuredMode) -> &'static str {
+    match m {
+        StructuredMode::Combined => "Data: one JSON per Bundle",
+        StructuredMode::Separate => "Data: one JSON per Asset",
+        StructuredMode::None => "Data: skip",
+    }
+}
+
+fn structured_tip(m: StructuredMode) -> &'static str {
+    match m {
+        StructuredMode::Combined => {
+            "{bundle}.structured.json holds every Structured Asset of the Bundle, keyed by name"
+        }
+        StructuredMode::Separate => {
+            "One {asset}.json per Structured Asset, as earlier releases wrote"
+        }
+        StructuredMode::None => "Do not write Structured Assets",
     }
 }
 

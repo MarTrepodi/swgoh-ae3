@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use ae3_core::config::{AudioFormat, ImageFormat, Layout};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, StructuredMode};
 use ae3_core::{AssetIndex, AssetInfo, AssetVersion, Config, ConfigFile, ExportOptions, Platform};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
@@ -68,6 +68,7 @@ pub enum SettingChange {
     AudioFormat(AudioFormat),
     Layout(Layout),
     SkipExisting(bool),
+    Structured(StructuredMode),
 }
 
 pub struct Ae3App {
@@ -589,6 +590,10 @@ impl Ae3App {
                 self.config.skip_existing = v;
                 s.skip_existing = Some(v);
             }
+            SettingChange::Structured(v) => {
+                self.config.structured = v;
+                s.structured = Some(v);
+            }
         }
         self.config_dirty_since = Some(Instant::now());
     }
@@ -1028,6 +1033,24 @@ mod tests {
 
         // The Diff tab renders without a Diff.
         app.model.tab = crate::model::Tab::Diff;
+        frame(&ctx, &mut app);
+    }
+
+    /// The Output section's Structured Asset choice reaches the export
+    /// options and the settings file.
+    #[test]
+    fn structured_mode_setting_reaches_exports() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let mode = |app: &Ae3App| ExportOptions::from_config(&app.config).structured;
+        assert_eq!(mode(&app), StructuredMode::Combined);
+        app.change_setting(SettingChange::Structured(StructuredMode::Separate));
+        assert_eq!(mode(&app), StructuredMode::Separate);
+        assert_eq!(
+            app.config_file.settings.structured,
+            Some(StructuredMode::Separate)
+        );
+        assert!(app.config_dirty_since.is_some(), "saved shortly");
         frame(&ctx, &mut app);
     }
 
