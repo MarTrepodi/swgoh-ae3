@@ -25,6 +25,7 @@
 //! skip-existing = false
 //! structured = "combined" # separate | combined | none
 //! language = "ENG_US"      # display names for search; ENG_US, FRE_FR, ...
+//! check-for-updates = true # the GUI looks for a new AE3 release once a day
 //!
 //! [gui]
 //! last-asset-version = 100054
@@ -333,6 +334,9 @@ pub struct Settings {
     pub no_cache: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<Language>,
+    /// Whether the GUI looks for a newer AE3 release (the CLI never does).
+    #[serde(skip_serializing_if = "Option::is_none", alias = "check_for_updates")]
+    pub check_for_updates: Option<bool>,
 }
 
 /// Every `AE3_*` variable [`Settings::from_env`] reads.
@@ -351,6 +355,7 @@ pub const ENV_VARS: &[&str] = &[
     "AE3_STRUCTURED",
     "AE3_NO_CACHE",
     "AE3_LANGUAGE",
+    "AE3_CHECK_FOR_UPDATES",
 ];
 
 fn parse_bool(s: &str) -> Result<bool, String> {
@@ -394,6 +399,7 @@ impl Settings {
             structured: higher.structured.or(self.structured),
             no_cache: higher.no_cache.or(self.no_cache),
             language: higher.language.or(self.language),
+            check_for_updates: higher.check_for_updates.or(self.check_for_updates),
         }
     }
 
@@ -440,6 +446,7 @@ impl Settings {
             structured: get(&lookup, "AE3_STRUCTURED", parsed)?,
             no_cache: get(&lookup, "AE3_NO_CACHE", parse_bool)?,
             language: get(&lookup, "AE3_LANGUAGE", parsed)?,
+            check_for_updates: get(&lookup, "AE3_CHECK_FOR_UPDATES", parse_bool)?,
         })
     }
 }
@@ -547,6 +554,8 @@ pub struct Config {
     pub no_cache: bool,
     /// The language of the display names search matches.
     pub language: Language,
+    /// Whether the GUI looks for a newer AE3 release, at most once a day.
+    pub check_for_updates: bool,
 }
 
 impl Default for Config {
@@ -566,6 +575,7 @@ impl Default for Config {
             structured: StructuredMode::default(),
             no_cache: false,
             language: Language::default(),
+            check_for_updates: true,
         }
     }
 }
@@ -633,6 +643,9 @@ impl Config {
         if let Some(v) = s.language {
             self.language = v;
         }
+        if let Some(v) = s.check_for_updates {
+            self.check_for_updates = v;
+        }
     }
 
     /// Loads the file ([`ConfigFile::path`]) and the environment, and merges
@@ -683,6 +696,19 @@ mod tests {
         assert!(!c.skip_existing && !c.no_cache);
         assert_eq!(c.structured, StructuredMode::Combined);
         assert_eq!(c.language, Language::EngUs);
+        assert!(c.check_for_updates);
+    }
+
+    #[test]
+    fn update_checks_can_be_turned_off() {
+        for text in ["check-for-updates = false", "check_for_updates = false"] {
+            let file = ConfigFile::parse(text).unwrap();
+            assert_eq!(file.settings.check_for_updates, Some(false), "{text}");
+            let c = Config::resolve(&Settings::default(), &Settings::default(), &file.settings);
+            assert!(!c.check_for_updates, "{text}");
+        }
+        let s = env(&[("AE3_CHECK_FOR_UPDATES", "off")]).unwrap();
+        assert_eq!(s.check_for_updates, Some(false));
     }
 
     #[test]
@@ -810,6 +836,7 @@ mod tests {
                 structured: Some(StructuredMode::Separate),
                 no_cache: Some(false),
                 language: Some(Language::GerDe),
+                check_for_updates: Some(false),
             },
             gui: GuiState {
                 last_asset_version: Some(AssetVersion(100_054)),
@@ -820,6 +847,7 @@ mod tests {
         assert!(text.contains("cache-cap = \"2GB\""), "{text}");
         assert!(text.contains("platform = \"iOS\""), "{text}");
         assert!(text.contains("structured = \"separate\""), "{text}");
+        assert!(text.contains("check-for-updates = false"), "{text}");
         assert!(
             text.contains("[gui]\nlast-asset-version = 100054"),
             "{text}"
