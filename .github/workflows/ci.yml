@@ -25,7 +25,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       # Installs the channel and components pinned in rust-toolchain.toml.
       - run: rustup toolchain install
       - run: cargo fmt --all --check
@@ -49,7 +49,7 @@ jobs:
       # Keep LF endings so scripts/fetch-fixtures.sh runs under Git Bash.
       - if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # ae3-gui plays sounds through cpal, which links ALSA on Linux and
@@ -62,7 +62,7 @@ jobs:
       # script itself, which holds the pinned list and its checksums; the
       # script re-verifies every file, so a hit costs only the hashing.
       - name: Cache fixtures
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: fixtures
           key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
@@ -120,11 +120,11 @@ jobs:
     name: Texture oracle
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Cache fixtures
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: fixtures
           key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}

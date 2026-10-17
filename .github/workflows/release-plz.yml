@@ -7,6 +7,10 @@
 # contents and pull-requests write access. With the default GITHUB_TOKEN,
 # GitHub starts no workflows for the release PR (so CI would not run on it)
 # or for the tag (so no release would be built).
+#
+# Both jobs run only in the swgoh-utils repository, so forks open no release
+# PRs. Another repository (a private test copy, say) opts in by setting the
+# repository variable RELEASE_PLZ to `true`.
 name: Release-plz
 
 on:
@@ -19,13 +23,13 @@ permissions:
 jobs:
   release-plz-release:
     name: Tag release
-    if: github.repository_owner == 'swgoh-utils'
+    if: github.repository_owner == 'swgoh-utils' || vars.RELEASE_PLZ == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -39,7 +43,7 @@ jobs:
 
   release-plz-pr:
     name: Release PR
-    if: github.repository_owner == 'swgoh-utils'
+    if: github.repository_owner == 'swgoh-utils' || vars.RELEASE_PLZ == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -48,7 +52,7 @@ jobs:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
