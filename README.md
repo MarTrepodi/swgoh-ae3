@@ -27,7 +27,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
   | Images | PNG, or lossless WebP |
   | Sprite atlases | One image per sprite, plus a JSON file describing each sprite |
   | Meshes | Wavefront OBJ, oriented as swgoh-ae2 wrote them, with normals, UVs and one group per submesh |
-  | Audio | Ogg Vorbis, or the original Wwise data |
+  | Audio | Ogg Vorbis, WAV (Wwise PCM and PTADPCM), or the original Wwise data |
   | Structured data | JSON |
   | Text | Original bytes |
 
