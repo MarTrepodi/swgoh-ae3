@@ -552,4 +552,6 @@ impl AssetIndex {
 }
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
