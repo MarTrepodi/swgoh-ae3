@@ -745,3 +745,34 @@ fn empty_font_textures_are_skipped_not_failed() {
     assert_eq!(skipped.len(), 2, "{:#?}", report.skipped);
     assert!(ids.iter().all(|id| skipped.contains(id)));
 }
+
+/// Native Unity Sprites packed at fractional positions, one of them reaching
+/// half a pixel past its texture's top edge.
+#[test]
+fn exports_native_sprites_with_fractional_rects() {
+    let Some(f) = fixture("sprites", &["ability_char_plugin_echo_lb2.bundle"]) else {
+        return;
+    };
+    let bundle = f.store.open_bundle("ability_char_plugin_echo_lb2").unwrap();
+    let sprites: Vec<_> = bundle
+        .assets()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.kind == AssetKind::Sprite)
+        .collect();
+    assert!(sprites.len() > 1, "{sprites:?}");
+    for sprite in &sprites {
+        let image = bundle
+            .sprite_image(sprite.path_id)
+            .unwrap_or_else(|e| panic!("{}: {e}", sprite.name));
+        assert!(image.width() > 0 && image.height() > 0);
+    }
+    let report = export(
+        &f,
+        &packages(&["ability_char_plugin_echo_lb2"]),
+        &f.options(),
+    );
+    let figure = f.out("ability/ability_char_plugin_echo_lb2/ECHO_SPCL2_FIGURE_bnw.png");
+    assert_eq!(png_size(&figure), (50, 46));
+    assert!(report.is_success());
+}
