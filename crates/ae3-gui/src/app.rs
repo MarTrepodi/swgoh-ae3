@@ -1035,8 +1035,17 @@ impl Ae3App {
     }
 }
 
-impl eframe::App for Ae3App {
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+/// Repaint policy: the window repaints only when something changed. Worker
+/// messages wake it ([`Outbox`]; progress at most every
+/// [`tasks::PROGRESS_INTERVAL`]), input wakes it, and the only timers are the
+/// Asset Version recheck (focused windows, every 15 minutes) and the
+/// settings save a second after a change. Nothing animates while idle:
+/// spinners are drawn only while a short job runs that the user waits for,
+/// and the progress bars are not animated. `idle_frames_schedule_no_repaint`
+/// checks this.
+impl Ae3App {
+    /// The per-frame work outside drawing: messages, timers, saving.
+    fn tick(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.inbox.try_recv() {
             self.handle(ctx, msg);
         }
@@ -1058,6 +1067,20 @@ impl eframe::App for Ae3App {
             }
         }
         self.drop_closed_detail();
+    }
+
+    /// Draws the window and acts on what the drawing changed.
+    fn draw(&mut self, ui: &mut egui::Ui) {
+        crate::ui::show(self, ui);
+        // Selection changes made while drawing take effect here.
+        self.sync_preview();
+        self.flush_thumbnail_requests();
+    }
+}
+
+impl eframe::App for Ae3App {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.tick(ctx);
         // GPU buffers are kept only while a Mesh is on screen.
         let showing_mesh = matches!(
             &self.detail,
@@ -1072,10 +1095,7 @@ impl eframe::App for Ae3App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        crate::ui::show(self, ui);
-        // Selection changes made while drawing take effect here.
-        self.sync_preview();
-        self.flush_thumbnail_requests();
+        self.draw(ui);
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
@@ -1354,6 +1374,171 @@ mod tests {
             app.store.as_ref().unwrap().location().base_url,
             "https://mirror.invalid/PROD/"
         );
+    }
+
+    /// Runs a few whole frames (as eframe does: `tick`, then `draw`) a
+    /// quarter second apart, so egui's own short animations (a scroll bar
+    /// appearing) end, and returns the repaint delay the last one asked
+    /// for: `Duration::MAX` when nothing is scheduled, zero for a
+    /// continuous repaint.
+    fn settled_repaint_delay(ctx: &egui::Context, app: &mut Ae3App) -> Duration {
+        let mut delay = Duration::ZERO;
+        for _ in 0..6 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1280.0, 860.0))),
+                time: Some(ctx.cumulative_frame_nr() as f64 * 0.25),
+                ..RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                app.tick(ui.ctx());
+                app.draw(ui);
+            });
+            output.textures_delta.clear();
+            delay = output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map_or(Duration::MAX, |v| v.repaint_delay);
+        }
+        delay
+    }
+
+    /// The window idles at no CPU: once a frame has settled, nothing asks
+    /// for another before the 15-minute Asset Version recheck, whether
+    /// nothing is loaded, a Manifest is shown, the Asset Index builds,
+    /// pauses or has finished, the startup load looks for a newer Asset
+    /// Version, or an extraction runs between progress messages.
+    /// Longer than any wait a settled window may schedule, short of the
+    /// Asset Version recheck.
+    const IDLE: Duration = Duration::from_secs(60);
+
+    /// An offline app showing a small made-up Manifest.
+    fn app_with_manifest(ctx: &egui::Context) -> Ae3App {
+        let mut app = Ae3App::new(ctx, Config::default(), ConfigFile::default(), None, None);
+        app.index_on_load = false;
+        let package = |name: &str, kind| ae3_core::Package {
+            name: name.into(),
+            kind,
+            size: 1000,
+            ..ae3_core::Package::default()
+        };
+        let manifest = Manifest {
+            asset_version: AssetVersion(100_054),
+            packages: (0..50)
+                .map(|i| package(&format!("charui_{i}"), ae3_core::PackageKind::Bundle))
+                .chain([package("audio_x", ae3_core::PackageKind::AudioPackage)])
+                .collect(),
+            ..Manifest::default()
+        };
+        app.model.set_manifest(Arc::new(manifest), Instant::now());
+        app
+    }
+
+    #[test]
+    fn idle_frames_schedule_no_repaint() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "empty window"
+        );
+
+        let mut app = app_with_manifest(&ctx);
+        let now = Instant::now();
+        let delay = settled_repaint_delay(&ctx, &mut app);
+        assert!(
+            delay >= IDLE && delay <= crate::model::update::RECHECK_INTERVAL,
+            "Manifest shown: {delay:?}"
+        );
+
+        // The startup load still resolving the latest shows no spinner.
+        let generation = app.begin_startup();
+        assert!(app.model.manifest_job.finish(generation, Ok(false)));
+        assert!(app.model.startup.is_pending());
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "startup check"
+        );
+        app.model.startup.abandon();
+
+        let generation = app.model.index_job.start(now);
+        app.model.index_job.update(
+            generation,
+            crate::model::IndexProgressView {
+                done: 10,
+                total: 51,
+                bytes_fetched: 1 << 20,
+                ..Default::default()
+            },
+        );
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "index building"
+        );
+
+        // A progress message wakes the window once, then it idles again.
+        app.outbox.send(Msg::IndexProgress {
+            generation,
+            view: crate::model::IndexProgressView {
+                done: 11,
+                total: 51,
+                ..Default::default()
+            },
+            paused: false,
+        });
+        assert!(ctx.has_requested_repaint(), "the message woke the window");
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE);
+        assert_eq!(app.model.index_job.progress().done, 11);
+
+        assert!(app.model.index_job.set_paused(generation, true, now));
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "index paused"
+        );
+        assert!(app.model.index_job.finish(generation, Ok(false)));
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE, "index done");
+
+        let extraction = app.model.extract_job.start(now);
+        assert!(settled_repaint_delay(&ctx, &mut app) >= IDLE, "extracting");
+        assert!(app.model.extract_job.finish(extraction, Ok(false)));
+
+        // A spinner, by contrast, repaints continuously while its job runs:
+        // the checks above would catch one left on screen.
+        app.model.manifest_job.start(now);
+        assert_eq!(settled_repaint_delay(&ctx, &mut app), Duration::ZERO);
+    }
+
+    /// A Bundle preview waiting for thumbnails draws placeholders, not
+    /// spinners, so it idles too.
+    #[test]
+    fn an_idle_preview_schedules_no_repaint() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_manifest(&ctx);
+        let id = app.model.rows[0].id;
+        app.model.click_row(id, ClickModifiers::default());
+        app.model.open_preview(id);
+        let asset = |path_id: i64, kind| AssetInfo {
+            path_id,
+            name: format!("asset_{path_id}"),
+            class_name: "Texture2D".into(),
+            script_class: None,
+            kind,
+            byte_size: 100,
+            texture: None,
+            sprite_count: None,
+            container_path: None,
+        };
+        if let Some(preview) = &mut app.model.preview {
+            preview.set_assets(vec![
+                asset(1, AssetKind::Texture),
+                asset(2, AssetKind::Structured),
+                asset(3, AssetKind::Mesh),
+            ]);
+        }
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "Bundle preview"
+        );
+        assert!(app.model.preview.is_some(), "the preview stayed open");
     }
 
     /// Every text painted in one frame.
