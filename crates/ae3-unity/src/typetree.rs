@@ -150,13 +150,27 @@ fn array_count(r: &mut Reader<'_>, elem_min: usize) -> ReadResult<usize> {
 }
 
 /// Whether the node itself, or the `Array` inside a `string`/`vector`, asks
-/// for alignment after it.
+/// for alignment after it. A `string` can wrap another `string` (Unity's
+/// `PropertyName` is `string first` holding `string id`), so the flags of
+/// every wrapped `string` on the way to the `Array` count too.
 fn aligns_after(node: &TypeTreeNode) -> bool {
-    aligns(node)
-        || node
-            .children
-            .first()
-            .is_some_and(|c| c.m_Type == "Array" && aligns(c))
+    if aligns(node) {
+        return true;
+    }
+    let mut current = node;
+    while let Some(child) = current.children.first() {
+        match child.m_Type.as_str() {
+            "Array" => return aligns(child),
+            "string" if current.m_Type == "string" => {
+                if aligns(child) {
+                    return true;
+                }
+                current = child;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Reads one node into a [`Value`].
@@ -414,6 +428,36 @@ pub(crate) mod tests {
         let data = (-1i32).to_le_bytes();
         let mut r = Reader::new(&data, false);
         assert!(matches!(read_value(&tree, &mut r), Err(ReadError::Bad(_))));
+    }
+
+    /// `PropertyName` keys (as in a `PlayableDirector`'s `m_ExposedReferences`)
+    /// are a `string` wrapping an aligned `string id`; the padding after the
+    /// text must be skipped before the next field.
+    #[test]
+    fn nested_strings_keep_the_inner_alignment() {
+        let mut id = string("id");
+        id.m_MetaFlag = Some(ALIGN_BYTES);
+        let property_name = node("string", "first", 0, vec![id]);
+        let tree = node(
+            "pair",
+            "data",
+            0,
+            vec![property_name, node("SInt32", "second", 0, vec![])],
+        );
+        let mut data = 3i32.to_le_bytes().to_vec();
+        data.extend_from_slice(b"abc\0"); // 3 bytes + 1 padding
+        data.extend_from_slice(&(-9i32).to_le_bytes());
+        for read in [true, false] {
+            let mut r = Reader::new(&data, false);
+            if read {
+                let v = read_value(&tree, &mut r).unwrap();
+                assert_eq!(v.get("first").and_then(Value::as_str), Some("abc"));
+                assert_eq!(v.get("second").and_then(Value::as_i64), Some(-9));
+            } else {
+                skip_value(&tree, &mut r).unwrap();
+            }
+            assert_eq!(r.pos(), data.len());
+        }
     }
 
     #[test]

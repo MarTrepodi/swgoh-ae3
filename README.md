@@ -18,7 +18,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
   - text, with syntax highlighting
   - audio packages as a list of sounds with codec, channels, sample rate and duration (playback is planned)
   - 3D meshes (planned)
-- **Sprite separation.** Cuts sprite atlases into individual named images, with metadata about each sprite.
+- **Sprite separation.** Cuts sprite atlases into individual named images, with metadata about each sprite. Many bundles carry a copy of an atlas whose texture lives in one shared bundle; those sprites are cut once, into the shared bundle's folder, and each copy's metadata points there.
 - **Version diffs.** Compares two asset versions and reports added, changed and removed bundles and audio packages, with download sizes. It flags releases where the game moved to a new engine version, and can extract only what changed.
 - **Exports:**
 

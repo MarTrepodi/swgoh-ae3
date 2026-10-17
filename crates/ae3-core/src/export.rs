@@ -43,6 +43,7 @@ use crate::config::{AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout
 use crate::download::DEFAULT_PARALLEL_DOWNLOADS;
 use crate::error::AssetError;
 use crate::guard::catch_panic;
+use crate::manifest::category_of;
 
 /// The longest file name stem AE3 writes, in bytes, leaving room for a
 /// `_{path_id}` suffix and an extension within common 255-byte limits.
@@ -362,9 +363,20 @@ pub fn export_audio_package(
 #[derive(Default)]
 struct Claims {
     paths: Mutex<HashMap<String, String>>,
+    /// Sprite directories already cut in this batch.
+    atlas_dirs: Mutex<HashSet<String>>,
 }
 
 impl Claims {
+    /// Records that the Sprites in `dir` are being cut; true the first time
+    /// in this batch.
+    fn first_cut(&self, dir: &Path) -> bool {
+        self.atlas_dirs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(dir.to_string_lossy().to_lowercase())
+    }
+
     /// Claims `rel` for `package`; false when another Package has it.
     fn claim(&self, rel: &Path, package: &str) -> bool {
         let key = rel.to_string_lossy().to_lowercase();
@@ -628,6 +640,16 @@ impl<'a> Batch<'a> {
     /// Decides what to write for an Asset; `None` to ignore it.
     fn plan(&self, view: &BundleView<'_>, info: &AssetInfo, explicit: bool) -> Option<Action> {
         Some(match info.kind {
+            // Dynamic fonts ship an empty 0x0 "Font Texture" that the game
+            // fills at run time; there are no pixels to export.
+            AssetKind::Texture
+                if info
+                    .texture
+                    .as_ref()
+                    .is_some_and(|t| t.width == 0 || t.height == 0) =>
+            {
+                Action::Skip("empty texture (0x0); the game fills it at run time".into())
+            }
             AssetKind::Texture | AssetKind::Sprite => Action::Image,
             AssetKind::Atlas if self.options.atlas_cutting && info.sprite_count != Some(0) => {
                 Action::Atlas
@@ -728,46 +750,66 @@ impl<'a> Batch<'a> {
         let path_id = p.info.path_id;
         let atlas = view.atlas(path_id)?;
         let ext = self.image_ext();
-        let atlas_dir = sprites_dir.join(&p.stem);
         let json_path = sprites_dir.join(format!("{}.json", p.stem));
         let files = sprite_file_names(&atlas, ext);
+        // Unity copies an Atlas into every Bundle that uses it, while its
+        // texture stays in one shared Bundle (such as shared_uicontainer).
+        // Such Sprites are cut once per batch, into the texture owner's
+        // folder, instead of once for every Bundle holding a copy.
+        let owner = atlas
+            .texture
+            .as_ref()
+            .map(|t| t.asset.package.as_str())
+            .filter(|owner| *owner != package);
+        let (atlas_dir, writer) = match owner {
+            None => (sprites_dir.join(&p.stem), package),
+            Some(owner) => (
+                self.options
+                    .bundle_dir(category_of(owner), owner)
+                    .join("sprites")
+                    .join(sanitize_file_name(&atlas.name)),
+                owner,
+            ),
+        };
+        let first_cut = self.claims.first_cut(&atlas_dir);
 
         let exists = |rel: &Path| self.options.output_dir.join(rel).exists();
-        let all_exist = self.options.skip_existing
-            && exists(&json_path)
-            && files.iter().all(|f| exists(&atlas_dir.join(f)));
-        if all_exist {
+        let sprites_exist =
+            self.options.skip_existing && files.iter().all(|f| exists(&atlas_dir.join(f)));
+        if sprites_exist && exists(&json_path) {
             self.skip_existing(report, package, name, Some(path_id), &json_path);
             return Ok(());
         }
 
-        let texture = view.atlas_texture(&atlas)?;
         let restore = self.options.padding_restoration;
-        for (sprite, file) in atlas.sprites.iter().zip(&files) {
-            if self.is_cancelled() {
-                report.cancelled = true;
-                return Ok(());
-            }
-            let label = format!("{name}/{}", sprite.name);
-            let result = self.write_with(
-                package,
-                &label,
-                Some(path_id),
-                &atlas_dir.join(file),
-                report,
-                || {
-                    let image = cut_sprite(&texture, sprite, restore).map_err(|source| {
-                        AssetError::Image {
-                            package: package.to_owned(),
-                            path_id,
-                            source,
-                        }
-                    })?;
-                    self.encode(&image, package, path_id)
-                },
-            );
-            if let Err(e) = result {
-                report.failure(package, Some((&label, Some(path_id))), &e);
+        if (owner.is_none() || first_cut) && !sprites_exist {
+            let texture = view.atlas_texture(&atlas)?;
+            for (sprite, file) in atlas.sprites.iter().zip(&files) {
+                if self.is_cancelled() {
+                    report.cancelled = true;
+                    return Ok(());
+                }
+                let label = format!("{name}/{}", sprite.name);
+                let result = self.write_with(
+                    writer,
+                    &label,
+                    Some(path_id),
+                    &atlas_dir.join(file),
+                    report,
+                    || {
+                        let image = cut_sprite(&texture, sprite, restore).map_err(|source| {
+                            AssetError::Image {
+                                package: package.to_owned(),
+                                path_id,
+                                source,
+                            }
+                        })?;
+                        self.encode(&image, package, path_id)
+                    },
+                );
+                if let Err(e) = result {
+                    report.failure(package, Some((&label, Some(path_id))), &e);
+                }
             }
         }
         let json = AtlasJson {
@@ -783,7 +825,7 @@ impl<'a> Batch<'a> {
                 .zip(&files)
                 .map(|(rect, file)| SpriteJson {
                     rect,
-                    file: format!("{}/{file}", p.stem),
+                    file: relative_path(sprites_dir, &atlas_dir.join(file)),
                 })
                 .collect(),
         };
@@ -961,6 +1003,22 @@ impl<'a> Batch<'a> {
         });
         Ok(())
     }
+}
+
+/// The path of `to` relative to the directory `from`, with `/` separators.
+/// Both are relative to the output directory and contain no `..`.
+fn relative_path(from: &Path, to: &Path) -> String {
+    let from: Vec<_> = from.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    std::iter::repeat_n("..".to_owned(), from.len() - common)
+        .chain(
+            to[common..]
+                .iter()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+        )
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// File names for an Atlas's Sprites: sanitized, made unique
@@ -1146,6 +1204,30 @@ mod tests {
             Path::new("cat/A_7.png")
         );
         assert_eq!(batch.claimed(rel, "p3", "7"), Path::new("cat/a_7_2.png"));
+    }
+
+    #[test]
+    fn relative_paths_between_output_directories() {
+        let from = Path::new("ui/ui_ally_tile/sprites");
+        assert_eq!(
+            relative_path(
+                from,
+                Path::new("ui/ui_ally_tile/sprites/standard_atlas/a.png")
+            ),
+            "standard_atlas/a.png"
+        );
+        assert_eq!(
+            relative_path(
+                from,
+                Path::new("shared/shared_uicontainer/sprites/standard_atlas/a.png")
+            ),
+            "../../../shared/shared_uicontainer/sprites/standard_atlas/a.png"
+        );
+        // ae2 layout: both under one Category directory.
+        assert_eq!(
+            relative_path(Path::new("ui/sprites"), Path::new("shared/sprites/x/a.png")),
+            "../../shared/sprites/x/a.png"
+        );
     }
 
     #[test]
