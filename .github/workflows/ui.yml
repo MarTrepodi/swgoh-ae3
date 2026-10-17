@@ -1,0 +1,359 @@
+name: UI tests
+
+# The ae3-gui test suite, in three layers:
+#   - interaction: egui_kittest tests driving the app model headless (no GPU,
+#     no network), against the pinned fixtures;
+#   - snapshots: the same harness rendering through wgpu on Mesa lavapipe
+#     and comparing against the committed PNGs;
+#   - e2e: the shipped release binary on every platform, in its smoke mode
+#     (AE3_GUI_SMOKE): it loads the live Manifest, opens a Bundle and the
+#     detail viewer, measures idle CPU and saves a screenshot.
+#
+# full.yml calls this workflow after its build matrix has uploaded the
+# ae3-gui-<slug> binaries, with build: false. Run on its own (Actions tab,
+# workflow_dispatch) it builds them itself; build: false only works when a
+# caller in the same run has uploaded them.
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build the release ae3-gui binaries first
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      build:
+        description: Build the release ae3-gui binaries first (false when the caller uploaded them)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Prefixed: when full.yml calls this workflow, github.workflow is the
+# caller's name, and sharing the caller's group would cancel this run.
+concurrency:
+  group: ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  AE3_FIXTURES: ${{ github.workspace }}/fixtures
+  AE3_REQUIRE_FIXTURES: "1"
+
+jobs:
+  build:
+    name: Build ae3-gui (${{ matrix.name }})
+    if: inputs.build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            slug: windows-x86_64
+          - name: macOS arm64
+            os: macos-latest
+            slug: macos-arm64
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            slug: linux-x86_64
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            slug: linux-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install
+      # Its own key: full.yml's build job has the same job id but builds the
+      # whole workspace, tests included.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ui-release
+      # ae3-gui plays sounds through cpal, which links ALSA on Linux.
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+      - name: Release build
+        run: cargo build --release -p ae3-gui --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ae3-gui-${{ matrix.slug }}
+          path: target/release/ae3-gui${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 7
+
+  interaction:
+    name: Interaction tests
+    needs: build
+    # Runs when build succeeded or was skipped (build: false).
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+      - name: Cache fixtures
+        uses: actions/cache@v5
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        run: bash scripts/fetch-fixtures.sh
+      - name: Test
+        run: cargo test -p ae3-gui-tests --locked
+
+  snapshots:
+    name: Snapshot tests
+    needs: build
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # mesa-vulkan-drivers ships lavapipe; libvulkan1 is the loader wgpu
+      # opens at runtime; vulkan-tools gives vulkaninfo for the log.
+      - name: Install ALSA headers and lavapipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev mesa-vulkan-drivers libvulkan1 vulkan-tools
+      # The runner has no GPU. wgpu renders on lavapipe, Mesa's CPU Vulkan
+      # driver; pointing the Vulkan loader at its ICD alone keeps any other
+      # driver from being picked. The manifest's file name differs between
+      # Mesa packagings (lvp_icd.json, lvp_icd.x86_64.json), so look it up
+      # rather than hard-code it. VK_DRIVER_FILES is the current variable,
+      # VK_ICD_FILENAMES the one older loaders read.
+      - name: Point the Vulkan loader at lavapipe
+        run: |
+          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | sort | head -n 1)
+          if [[ -z "$icd" ]]; then
+            echo "::error::No lavapipe ICD manifest under /usr/share/vulkan/icd.d"
+            ls -l /usr/share/vulkan/icd.d || true
+            exit 1
+          fi
+          echo "Using $icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+      - name: Show the Vulkan device
+        run: vulkaninfo --summary
+      - name: Cache fixtures
+        uses: actions/cache@v5
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        run: bash scripts/fetch-fixtures.sh
+      - name: Test
+        run: cargo test -p ae3-gui-tests --features snapshots --locked
+      # A failing snapshot leaves <name>.new.png (what was rendered) and
+      # <name>.diff.png (where it differs) next to the reference.
+      - name: Upload snapshot differences
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-snapshot-diffs
+          path: |
+            crates/ae3-gui-tests/tests/snapshots/**/*.diff.png
+            crates/ae3-gui-tests/tests/snapshots/**/*.new.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+  e2e:
+    name: End-to-end (${{ matrix.name }})
+    needs: build
+    if: ${{ !failure() && !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            slug: windows-x86_64
+          - name: macOS arm64
+            os: macos-latest
+            slug: macos-arm64
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            slug: linux-x86_64
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+            slug: linux-aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # Pinned Mesa for Windows (see "Install Mesa OpenGL" below).
+      MESA_VERSION: 26.2.4
+      MESA_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ae3-gui-${{ matrix.slug }}
+          path: bin
+
+      # Linux runners have no display and no GPU. ae3-gui draws with OpenGL
+      # (glow), so it runs on Xvfb with Mesa's llvmpipe software renderer:
+      # libgl1-mesa-dri, libegl1 and libglx-mesa0 are the GL stack glutin
+      # loads; winit opens libX11, libxkbcommon-x11 and the X extensions with
+      # dlopen; libasound2t64 is the ALSA runtime cpal links against.
+      - name: Install Xvfb, Mesa OpenGL and runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgl1-mesa-dri libegl1 libglx-mesa0 libasound2t64 \
+            libx11-xcb1 libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6
+
+      # Windows runners have no OpenGL driver beyond Microsoft's GDI renderer
+      # (OpenGL 1.1), which glow cannot use. Mesa's llvmpipe build from
+      # pal1000/mesa-dist-win provides a software OpenGL 4.5: its
+      # opengl32.dll is a thin front for libgallium_wgl.dll, and Windows
+      # loads both from the executable's directory before System32. The
+      # archive is pinned by version and SHA-256; only those two DLLs are
+      # kept (and cached), and GALLIUM_DRIVER below selects llvmpipe over
+      # the D3D12 driver in the same DLL.
+      - name: Cache Mesa OpenGL
+        if: runner.os == 'Windows'
+        id: mesa-cache
+        uses: actions/cache@v5
+        with:
+          path: mesa
+          key: mesa-${{ env.MESA_VERSION }}-${{ env.MESA_SHA256 }}
+      - name: Install Mesa OpenGL
+        if: runner.os == 'Windows' && steps.mesa-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          url="https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/mesa.7z" "$url"
+          echo "$MESA_SHA256  $RUNNER_TEMP/mesa.7z" | sha256sum -c -
+          7z e -y -omesa "$RUNNER_TEMP/mesa.7z" x64/opengl32.dll x64/libgallium_wgl.dll
+          ls -l mesa
+      - name: Place Mesa next to ae3-gui.exe
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp mesa/opengl32.dll mesa/libgallium_wgl.dll bin/
+
+      # macOS runners have a logged-in GUI session, so the app opens a
+      # window there with no workaround.
+      - name: Smoke test
+        shell: bash
+        timeout-minutes: 15
+        env:
+          AE3_GUI_SMOKE_TIMEOUT: "180"
+          # No release check against the GitHub API (rate limits).
+          AE3_CHECK_FOR_UPDATES: "false"
+          # Software OpenGL on Linux (Mesa) and Windows (mesa-dist-win).
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          ext=""
+          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
+          bin="$PWD/bin/ae3-gui$ext"
+          chmod +x "$bin"
+
+          # Paths handed to the app: on Windows, D:/a/... rather than Git
+          # Bash's /d/a/... form, which a native program cannot open.
+          tmp=$RUNNER_TEMP
+          if command -v cygpath >/dev/null 2>&1; then tmp=$(cygpath -m "$tmp"); fi
+          out=$tmp/ui-e2e
+          mkdir -p "$out"
+
+          launcher=()
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # X11 only, on a virtual screen larger than the default window.
+            unset WAYLAND_DISPLAY
+            launcher=(xvfb-run --auto-servernum --server-args="-screen 0 1600x1000x24")
+          fi
+
+          # Each attempt gets an empty home, config, cache and output
+          # directory, so nothing from the runner's profile is read and no
+          # download or setting leaks between attempts.
+          attempt() {
+            local n=$1 home=$tmp/ui-home-$1
+            rm -rf "$home"
+            mkdir -p "$home"/{config,cache,data,appdata,localappdata,output}
+            echo "::group::Attempt $n"
+            local status=0
+            env \
+              HOME="$home" USERPROFILE="$home" \
+              XDG_CONFIG_HOME="$home/config" XDG_CACHE_HOME="$home/cache" XDG_DATA_HOME="$home/data" \
+              APPDATA="$home/appdata" LOCALAPPDATA="$home/localappdata" \
+              AE3_OUTPUT_DIR="$home/output" \
+              AE3_GUI_SMOKE="$out/report-$n.json" \
+              AE3_GUI_SMOKE_SCREENSHOT="$out/screenshot-$n.png" \
+              "${launcher[@]}" "$bin" 2> "$out/stderr-$n.log" || status=$?
+            echo "Exit status: $status"
+            echo "--- stderr (last 100 lines) ---"
+            tail -n 100 "$out/stderr-$n.log" || true
+            if [[ -f "$out/report-$n.json" ]]; then
+              echo "--- report ---"
+              cat "$out/report-$n.json"
+            fi
+            echo "::endgroup::"
+            return "$status"
+          }
+
+          describe() {
+            case $1 in
+              1) echo "a smoke step failed" ;;
+              2) echo "the smoke run timed out" ;;
+              *) echo "ae3-gui exited with status $1" ;;
+            esac
+          }
+
+          # One retry: the smoke run uses the live CDN, which can blip.
+          status=0
+          final=1
+          attempt 1 || status=$?
+          if (( status != 0 )); then
+            echo "::warning::Attempt 1: $(describe "$status"); retrying once."
+            status=0
+            final=2
+            attempt 2 || status=$?
+          fi
+
+          report=$out/report-$final.json
+          {
+            echo "### ae3-gui smoke test (${{ matrix.name }})"
+            if [[ -f "$report" ]]; then
+              jq -r '"Asset Version \(.asset_version // "?"), idle CPU \(.idle_cpu_percent // "?")%, \(.frames // "?") frames\n",
+                "| Step | OK | ms | Error |", "| --- | --- | ---: | --- |",
+                (.steps[]? | "| \(.name) | \(.ok) | \(.ms) | \(.error // "" | gsub("\\|"; "\\|") | gsub("\n"; " ")) |")' "$report"
+            else
+              echo "No report was written."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( status != 0 )); then
+            echo "::error::Attempt $final: $(describe "$status")."
+            exit "$status"
+          fi
+
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-e2e-${{ matrix.slug }}
+          path: ${{ runner.temp }}/ui-e2e
+          if-no-files-found: warn
+          retention-days: 14
+
+  # One check for the whole workflow. Skipped jobs pass it (build is skipped
+  # when the caller already built the binaries).
+  result:
+    name: UI result
+    if: always()
+    needs: [build, interaction, snapshots, e2e]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          if [[ "$FAILED" == "true" ]]; then
+            echo "::error::A UI test job failed or was cancelled."
+            exit 1
+          fi

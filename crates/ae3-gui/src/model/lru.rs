@@ -60,13 +60,11 @@ impl<K: Hash + Eq + Clone, V> ByteLru<K, V> {
         self.entries.len()
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn contains(&self, key: &K) -> bool {
         self.entries.contains_key(key)

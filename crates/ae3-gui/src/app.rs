@@ -125,12 +125,29 @@ pub struct Ae3App {
 
 impl Ae3App {
     /// Builds the app; `config` and `file` come from `Config::load`.
+    #[must_use]
     pub fn new(
         ctx: &egui::Context,
         config: Config,
         config_file: ConfigFile,
         config_path: Option<PathBuf>,
         notice: Option<String>,
+    ) -> Self {
+        let services = Services::new(config.clone());
+        Self::with_services(ctx, config, config_file, config_path, notice, services)
+    }
+
+    /// Builds the app over `services`, which decide how the network is
+    /// reached ([`Services::with_transport`]) and where the download cache
+    /// lives (`services.config`). Tests pass a fake transport here.
+    #[must_use]
+    pub fn with_services(
+        ctx: &egui::Context,
+        config: Config,
+        config_file: ConfigFile,
+        config_path: Option<PathBuf>,
+        notice: Option<String>,
+        services: Services,
     ) -> Self {
         crate::ui::install_fonts(ctx);
         let repaint = ctx.clone();
@@ -148,7 +165,7 @@ impl Ae3App {
             .unwrap_or_default();
         Self {
             model,
-            services: Arc::new(Services::new(config.clone())),
+            services: Arc::new(services),
             config,
             config_file,
             config_path,
@@ -197,6 +214,101 @@ impl Ae3App {
         }
     }
 
+    // ---- Seams for tests and the smoke run -----------------------------
+
+    /// Plays sounds through `output` instead of the default device.
+    pub fn set_audio_output(&mut self, output: Box<dyn Output>) {
+        self.audio = output;
+    }
+
+    /// What an [`Output`] calls when a sound ended or could not play.
+    #[must_use]
+    pub fn playback_end_reporter(&self) -> crate::output::OnEnd {
+        let ended = self.outbox.clone();
+        Arc::new(move |generation, error| {
+            ended.send(Msg::PlaybackEnded { generation, error });
+        })
+    }
+
+    /// Whether a loaded Manifest starts an Asset Index build (it does by
+    /// default). The build probes every Bundle over the network.
+    pub fn set_index_on_load(&mut self, on: bool) {
+        self.index_on_load = on;
+    }
+
+    /// The services background work runs with.
+    #[must_use]
+    pub fn services(&self) -> &Services {
+        &self.services
+    }
+
+    /// The settings as the configuration file will be saved.
+    #[must_use]
+    pub fn config_file(&self) -> &ConfigFile {
+        &self.config_file
+    }
+
+    /// Shows `manifest` as if it had been loaded for the configured
+    /// Platform from the PROD Environment. Its Packages are fetched through
+    /// the download cache when opened.
+    pub fn show_manifest(&mut self, manifest: ae3_core::Manifest) -> Result<(), String> {
+        let cache = self.services.cache()?;
+        let environment = ae3_core::Environment::new("PROD").ok_or("no PROD Environment")?;
+        let location = ae3_core::CdnLocation {
+            asset_version: manifest.asset_version,
+            base_url: format!("{}{environment}/", ae3_core::version::CDN_ROOT),
+            environment,
+            source: ae3_core::VersionSource::Explicit,
+        };
+        let store = Store::new(cache, location, self.config.platform, manifest);
+        self.manifest_loaded(store);
+        Ok(())
+    }
+
+    /// Opens the Bundle file at `path` in the preview, selecting the row of
+    /// the Manifest shown that has its name, without the download cache.
+    pub fn open_bundle_file(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let bundle = ae3_core::LoadedBundle::open_file(path).map_err(|e| e.to_string())?;
+        let row = self
+            .model
+            .rows
+            .iter()
+            .find(|r| r.name == bundle.name())
+            .map(|r| r.id)
+            .ok_or_else(|| format!("{} is not in the Manifest shown", bundle.name()))?;
+        let assets = bundle.view().map_err(|e| e.to_string())?.assets();
+        let kinds = assets.iter().map(|a| a.kind).collect();
+        self.model.selection.clear();
+        self.model
+            .click_row(row, crate::model::selection::ClickModifiers::default());
+        self.sync_preview();
+        // A newer generation, so the open the selection started is ignored.
+        let generation = self.preview_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.preview_opened(
+            generation,
+            Ok(Opened::Bundle {
+                bundle: Arc::new(bundle),
+                assets,
+                kinds,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Uploads `image` into the texture cache under `key`, as a decoded
+    /// thumbnail (`key.full` false) or detail texture is.
+    pub fn upload_texture(&mut self, ctx: &egui::Context, key: TexKey, image: ColorImage) {
+        let nearest = key.full;
+        self.upload(ctx, key, image, nearest);
+    }
+
+    /// One frame as the window runs it, without the OpenGL housekeeping:
+    /// worker messages and timers, then drawing and what it changed.
+    pub fn frame(&mut self, ui: &mut egui::Ui) {
+        self.tick(ui.ctx());
+        self.draw(ui);
+    }
+
     // ---- Name Index -----------------------------------------------------
 
     /// Loads the display names search matches on a thread of its own:
@@ -237,9 +349,9 @@ impl Ae3App {
     /// asked at most once a day.
     fn start_release_check(&mut self) {
         let path = self.release_state_path();
+        let transport = Arc::clone(self.services.transport());
         let outbox = self.outbox.clone();
         spawn_long("ae3-release-check", move || {
-            let transport = ae3_core::http::UreqTransport::new();
             let state = tasks::check_release(&transport, path.as_deref(), tasks::unix_now());
             outbox.send(Msg::ReleaseChecked(state));
         });

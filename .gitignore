@@ -21,3 +21,9 @@
 
 # Build output, wherever it appears
 target/
+
+# egui_kittest writes these beside a snapshot that changed; only the
+# reference <name>.png is tracked.
+*.diff.png
+*.new.png
+*.old.png

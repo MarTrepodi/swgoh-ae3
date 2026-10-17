@@ -1,11 +1,15 @@
 name: Full CI
 
-# Every platform, release builds, binary size budgets and the texture
-# oracle. Too slow for every pull request, so it runs:
+# Every platform, release builds, binary size budgets, the texture oracle
+# and the UI tests (ui.yml: interaction and snapshot tests, plus an
+# end-to-end smoke run of each platform's release ae3-gui binary built
+# here). Too slow for every pull request, so it runs:
 #   - nightly, when main has changed since the last successful run;
 #   - on release-plz's release pull request, so nothing ships untested;
 #   - on any pull request labelled full-ci;
 #   - on demand (workflow_dispatch).
+# A failing nightly run opens (or comments on) a nightly-failure issue; the
+# next passing one closes it.
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -74,17 +78,22 @@ jobs:
         # AT-SPI over zbus, X11, Wayland and client-side decorations), and
         # x86_64 code is larger than aarch64. First CI measurements:
         # macOS 5.9, Windows 9.6, Linux aarch64 9.6, Linux x86_64 12.8 MiB.
+        # slug names the ae3-gui-<slug> artifact the UI tests run.
         include:
           - name: Windows x86_64
+            slug: windows-x86_64
             os: windows-latest
             gui_budget: 11
           - name: macOS arm64
+            slug: macos-arm64
             os: macos-latest
             gui_budget: 8
           - name: Linux x86_64
+            slug: linux-x86_64
             os: ubuntu-24.04
             gui_budget: 14
           - name: Linux aarch64
+            slug: linux-aarch64
             os: ubuntu-24.04-arm
             gui_budget: 11
     runs-on: ${{ matrix.os }}
@@ -111,21 +120,37 @@ jobs:
         run: bash scripts/fetch-fixtures.sh
 
       # Bash, so the first command's failure is not lost on Windows, where
-      # PowerShell would only report the last one.
+      # PowerShell would only report the last one. ae3-gui-tests' snapshots
+      # feature needs a GPU, so --all-features leaves that crate out of the
+      # tests: its default interaction tests run here and the snapshots run
+      # on lavapipe in ui.yml. Clippy still checks it with every feature.
       - name: Clippy
         shell: bash
         run: |
-          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
+          cargo clippy --workspace --exclude ae3-oracle --exclude ae3-gui-tests --all-targets --all-features --locked -- -D warnings
           cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
+          cargo clippy -p ae3-gui-tests --all-targets --all-features --locked -- -D warnings
 
       - name: Test
         shell: bash
         run: |
-          cargo test --workspace --exclude ae3-oracle --all-features --locked
+          cargo test --workspace --exclude ae3-oracle --exclude ae3-gui-tests --all-features --locked
           cargo test -p ae3-oracle --locked
+          cargo test -p ae3-gui-tests --locked
 
+      # ae3-gui-tests is left out so its dependencies' features cannot
+      # unify into the shipped binaries measured below.
       - name: Release build
-        run: cargo build --workspace --exclude ae3-oracle --release --locked
+        run: cargo build --workspace --exclude ae3-oracle --exclude ae3-gui-tests --release --locked
+
+      # The binary ui.yml's end-to-end job runs on this platform.
+      - name: Upload ae3-gui
+        uses: actions/upload-artifact@v7
+        with:
+          name: ae3-gui-${{ matrix.slug }}
+          path: target/release/ae3-gui${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 7
 
       # Budgets are in MiB and apply to the default-feature release binaries:
       # 5 for ae3 everywhere, and matrix.gui_budget for ae3-gui.
@@ -186,6 +211,16 @@ jobs:
       - name: Oracle
         run: cargo test -p ae3-oracle --all-features --locked -- --include-ignored --nocapture
 
+  # UI tests on the binaries the build matrix uploaded; only when every
+  # platform built, since the end-to-end matrix needs all four.
+  ui:
+    name: UI
+    needs: [gate, build]
+    if: needs.gate.outputs.run == 'true' && needs.build.result == 'success'
+    uses: ./.github/workflows/ui.yml
+    with:
+      build: false
+
   # The single check branch protection requires. Skipped jobs pass it, so
   # ordinary pull requests are not held; on release-plz's release pull
   # request and full-ci pull requests every platform must pass. Requiring the
@@ -194,7 +229,7 @@ jobs:
   result:
     name: Full CI result
     if: always()
-    needs: [gate, build, oracle]
+    needs: [gate, build, oracle, ui]
     runs-on: ubuntu-24.04
     steps:
       - env:
@@ -203,4 +238,57 @@ jobs:
           if [[ "$FAILED" == "true" ]]; then
             echo "::error::A full CI job failed or was cancelled."
             exit 1
+          fi
+
+  # Nightly runs have no pull request to show their result, so a failure
+  # opens a nightly-failure issue (or comments on the open one) listing the
+  # failed jobs, and the next passing run closes it. Runs the gate skipped
+  # (main unchanged) tested nothing and report nothing.
+  report:
+    name: Nightly report
+    if: always() && github.event_name == 'schedule' && (needs.gate.result != 'success' || needs.gate.outputs.run == 'true')
+    needs: [gate, result]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.result.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          label=nightly-failure
+          gh label create "$label" --color B60205 \
+            --description "The nightly full CI run is failing" --force
+          open=$(gh issue list --label "$label" --state open --json number --jq '.[].number')
+
+          if [[ "$RESULT" == "success" ]]; then
+            for issue in $open; do
+              gh issue close "$issue" --comment "Nightly full CI passes again: $RUN_URL"
+            done
+            exit 0
+          fi
+
+          failed=$(gh api --paginate \
+            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[]
+              | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+              | select(.name != "Full CI result")
+              | "- \(.name) (\(.conclusion))"')
+          body=$RUNNER_TEMP/body.md
+          {
+            echo "Nightly full CI failed on \`$GITHUB_SHA\`: $RUN_URL"
+            echo
+            echo "Failed jobs:"
+            echo
+            echo "${failed:-- none recorded; see the run}"
+          } > "$body"
+
+          first=${open%%[[:space:]]*}
+          if [[ -n "$first" ]]; then
+            gh issue comment "$first" --body-file "$body"
+          else
+            gh issue create --title "Nightly full CI is failing" --label "$label" --body-file "$body"
           fi

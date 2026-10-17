@@ -1,0 +1,30 @@
+[package]
+name = "ae3-gui-tests"
+description = "Headless interaction and snapshot tests of the AE3 desktop app; never shipped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# The visual snapshot tests (tests/snapshots.rs). They render through wgpu,
+# so they need a GPU adapter; CI uses Mesa's lavapipe on Linux x86_64.
+snapshots = ["egui_kittest/wgpu", "egui_kittest/snapshot"]
+
+[dependencies]
+ae3-core.workspace = true
+ae3-gui = { path = "../ae3-gui" }
+eframe.workspace = true
+# Drives the real window through its AccessKit tree; no renderer unless the
+# `snapshots` feature asks for one.
+egui_kittest = { version = "0.37", default-features = false }
+
+[lints]
+workspace = true
+
+# Never part of a release archive.
+[package.metadata.dist]
+dist = false

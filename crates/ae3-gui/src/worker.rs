@@ -33,6 +33,11 @@ pub struct Pool {
 }
 
 impl Pool {
+    /// Starts `threads` workers (at least one).
+    ///
+    /// # Panics
+    ///
+    /// When the system cannot start a thread.
     #[must_use]
     pub fn new(threads: usize) -> Self {
         let (tx, rx) = mpsc::channel::<Task>();
@@ -98,6 +103,10 @@ impl Drop for Pool {
 }
 
 /// Starts a long job on its own thread.
+///
+/// # Panics
+///
+/// When the system cannot start a thread.
 pub fn spawn_long(name: &str, job: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name(name.to_owned())

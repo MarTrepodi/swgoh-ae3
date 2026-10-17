@@ -118,6 +118,9 @@ pub fn bundles(app: &mut Ae3App, ui: &mut egui::Ui) {
     let mut clicked: Option<usize> = None;
     // Borrowed out of the model while drawing; put back below.
     let visible = std::mem::take(&mut app.model.visible);
+    // A click on a cell's text selects its row. Selectable labels would
+    // take the click for text selection, so the row never saw it.
+    ui.style_mut().interaction.selectable_labels = false;
     TableBuilder::new(ui)
         .id_salt("bundles")
         .striped(true)
@@ -125,7 +128,7 @@ pub fn bundles(app: &mut Ae3App, ui: &mut egui::Ui) {
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::remainder().at_least(160.0).clip(true))
         .column(Column::initial(120.0).at_least(60.0).clip(true))
-        .column(Column::initial(84.0).at_least(60.0))
+        .column(Column::initial(84.0).at_least(60.0).clip(true))
         .auto_shrink(false)
         .header(ROW_HEIGHT, |mut header| {
             header.col(|ui| header_button(ui, app, "Name", SortKey::Name));

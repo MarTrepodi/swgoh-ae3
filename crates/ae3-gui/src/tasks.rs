@@ -34,8 +34,11 @@ use crate::model::table::SearchMatches;
 use crate::model::viewer::Channels;
 use crate::worker::Outbox;
 
-pub type Cache = PackageCache<UreqTransport>;
-pub type Store = PackageStore<UreqTransport>;
+/// The HTTP client every network call goes through: [`UreqTransport`] in
+/// the app, a fake in tests.
+pub type Net = Arc<dyn Transport + Send + Sync>;
+pub type Cache = PackageCache<Net>;
+pub type Store = PackageStore<Net>;
 
 /// How often progress messages may wake the UI.
 pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -49,23 +52,38 @@ pub const MAX_TEXT_BYTES: usize = 1 << 20;
 pub struct Services {
     /// The configuration the session started with (cache settings).
     pub config: Config,
+    transport: Net,
     cache: OnceLock<Result<Arc<Cache>, String>>,
 }
 
 impl Services {
+    /// Services that reach the network through [`UreqTransport`].
     #[must_use]
     pub fn new(config: Config) -> Self {
+        Self::with_transport(config, Arc::new(UreqTransport::new()))
+    }
+
+    /// Services that reach the network through `transport`.
+    #[must_use]
+    pub fn with_transport(config: Config, transport: Net) -> Self {
         Self {
             config,
+            transport,
             cache: OnceLock::new(),
         }
+    }
+
+    /// The HTTP client, for requests outside the download cache.
+    #[must_use]
+    pub fn transport(&self) -> &Net {
+        &self.transport
     }
 
     /// The download cache, opened on first use (it reads its directory).
     pub fn cache(&self) -> Result<Arc<Cache>, String> {
         self.cache
             .get_or_init(|| {
-                PackageCache::from_config(&self.config, UreqTransport::new())
+                PackageCache::from_config(&self.config, Arc::clone(&self.transport))
                     .map(Arc::new)
                     .map_err(|e| format!("cannot open the download cache: {e}"))
             })
@@ -655,6 +673,7 @@ pub fn decode_sound(from: &SoundFrom, sound: SoundRef) -> Result<Pcm, String> {
 }
 
 /// Re-applies a channel mask to the detail image.
+#[must_use]
 pub fn remask(image: &RgbaImage, channels: Channels) -> ColorImage {
     let pixels = channels.apply(image.pixels());
     ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], &pixels)

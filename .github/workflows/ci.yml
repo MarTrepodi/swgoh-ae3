@@ -1,9 +1,10 @@
 name: CI
 
 # The fast gate every pull request must pass: commit messages, formatting,
-# and clippy plus the test suite on Linux x86_64. Builds for the other
-# platforms, release builds and size budgets run in full.yml (nightly, on
-# release PRs, and on PRs labelled full-ci).
+# and clippy plus the test suite on Linux x86_64, including the GUI
+# interaction tests. Builds for the other platforms, release builds, size
+# budgets and the GUI snapshot and end-to-end tests run in full.yml
+# (nightly, on release PRs, and on PRs labelled full-ci) and ui.yml.
 on:
   pull_request:
   workflow_dispatch:
@@ -102,16 +103,21 @@ jobs:
         run: bash scripts/fetch-fixtures.sh
 
       # ae3-oracle's `oracle` feature links C zstd, so --all-features leaves
-      # that crate out; full.yml runs the oracle itself.
+      # that crate out; full.yml runs the oracle itself. ae3-gui-tests'
+      # `snapshots` feature needs a GPU, so its tests run here with default
+      # features (the interaction tests) and ui.yml runs the snapshots on
+      # lavapipe; clippy still checks it with every feature.
       - name: Clippy
         run: |
-          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
+          cargo clippy --workspace --exclude ae3-oracle --exclude ae3-gui-tests --all-targets --all-features --locked -- -D warnings
           cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
+          cargo clippy -p ae3-gui-tests --all-targets --all-features --locked -- -D warnings
 
       - name: Test
         run: |
-          cargo test --workspace --exclude ae3-oracle --all-features --locked
+          cargo test --workspace --exclude ae3-oracle --exclude ae3-gui-tests --all-features --locked
           cargo test -p ae3-oracle --locked
+          cargo test -p ae3-gui-tests --locked
 
   # The single check branch protection requires. It passes when every job
   # above passed or was skipped (documentation-only pull requests).
