@@ -47,10 +47,11 @@ fn options() -> SnapshotOptions {
     SnapshotOptions::new().threshold(1.0)
 }
 
-/// For snapshots showing filtered textures, whose sampling differs a
-/// little more between GPUs.
+/// For snapshots showing magnified textures. With the smooth synthetic
+/// pattern, GPUs that round texel edges differently disagree by about one
+/// level on a few edge pixels; a real regression changes thousands.
 fn texture_options() -> SnapshotOptions {
-    options().max_failed_pixels(32)
+    options().max_failed_pixels(128)
 }
 
 /// A window showing the synthetic Manifest, offline.
@@ -92,26 +93,28 @@ fn select_for_preview(h: &mut H, name: &str) {
     model.open_preview(id);
 }
 
-/// A generated RGBA image: diagonal colour bands over a soft alpha ramp,
-/// with a circle, so channel masking and filtering show.
+/// A generated RGBA image: smooth colour gradients over a soft alpha ramp,
+/// so channel masking and transparency show. Neighbouring texels differ by
+/// about one level, never by a hard edge: the viewer magnifies with nearest
+/// sampling at fractional zooms, and GPUs may round a texel edge to
+/// different screen pixels. With hard edges that moves whole rows of pixels
+/// between colours and fails the comparison across renderers (macOS Metal
+/// against Linux lavapipe); with gradients the same rounding costs a level.
 fn pattern(width: u32, height: u32, seed: u8) -> RgbaImage {
+    // Every value is reduced to 0..=255 before the conversion.
+    let level = |value: u32| u8::try_from(value.min(255)).unwrap_or(u8::MAX);
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-    let (cx, cy) = (width as f32 / 2.0, height as f32 / 2.0);
-    let radius = width.min(height) as f32 * 0.3;
+    let (x_max, y_max) = (width.max(2) - 1, height.max(2) - 1);
+    let shift = u32::from(seed) * 40;
     for y in 0..height {
         for x in 0..width {
-            let band = ((x + y) / 8 + u32::from(seed)) % 3;
-            let fx = x as f32 - cx;
-            let fy = y as f32 - cy;
-            let inside = fx * fx + fy * fy < radius * radius;
-            let (r, g, b) = match (band, inside) {
-                (_, true) => (240, 240, 240),
-                (0, _) => (220, 60, 60),
-                (1, _) => (60, 200, 90),
-                _ => (70, 110, 230),
-            };
-            let a = u8::try_from(80 + (175 * x / width.max(1))).unwrap_or(255);
-            pixels.extend_from_slice(&[r, g, b, a]);
+            let red = (255 * x / x_max + shift) % 256;
+            let green = 255 * y / y_max;
+            let blue = 255 - (255 * (x + y) / (x_max + y_max));
+            // 160..255: transparency shows, but the checkerboard behind
+            // the texture stays faint.
+            let alpha = 160 + 95 * x / x_max;
+            pixels.extend_from_slice(&[level(red), level(green), level(blue), level(alpha)]);
         }
     }
     RgbaImage::new(width, height, pixels).unwrap()
