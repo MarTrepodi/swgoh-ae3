@@ -17,6 +17,17 @@ const MAX_BODY_BYTES: u64 = 512 * 1024 * 1024;
 /// links need far more than the 30 seconds allowed for small documents.
 const STREAM_TIMEOUT: Duration = Duration::from_mins(30);
 
+/// Idle connections kept open per host, so that every download or probe
+/// thread finds one to reuse instead of opening a new TLS connection
+/// (ureq keeps 3 by default).
+const IDLE_CONNECTIONS_PER_HOST: usize = 32;
+
+/// After a Range response's wanted bytes, how much more of its body is read
+/// to reach the end, which hands the connection back to the pool. A server
+/// that honours Range sends nothing more; past this the connection is
+/// dropped instead.
+const MAX_RANGE_TRAILER: u64 = 64 * 1024;
+
 /// An HTTP failure. Response bodies are never included, because some of the
 /// documents AE3 fetches carry fields that must not be echoed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -142,6 +153,8 @@ impl UreqTransport {
             .timeout_global(Some(Duration::from_secs(30)))
             .user_agent(concat!("ae3/", env!("CARGO_PKG_VERSION")))
             .http_status_as_error(false)
+            .max_idle_connections(IDLE_CONNECTIONS_PER_HOST * 2)
+            .max_idle_connections_per_host(IDLE_CONNECTIONS_PER_HOST)
             .build()
             .into();
         Self { agent }
@@ -271,12 +284,15 @@ impl Transport for UreqTransport {
                     ));
                 }
                 let mut bytes = Vec::new();
-                response
-                    .body_mut()
-                    .as_reader()
+                let mut body = response.body_mut().as_reader();
+                body.by_ref()
                     .take(wanted)
                     .read_to_end(&mut bytes)
                     .map_err(|e| transport_error(url, &e))?;
+                // ureq reuses the connection only once the body has been
+                // read to its end; stopping at `wanted` would open a new
+                // connection (and TLS session) for every Range request.
+                let _ = io::copy(&mut body.take(MAX_RANGE_TRAILER), &mut io::sink());
                 Ok(RangeResponse { bytes, total_len })
             }
             200 => {

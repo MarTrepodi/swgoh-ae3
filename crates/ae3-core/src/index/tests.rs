@@ -236,6 +236,7 @@ fn index_file_round_trips() {
         "unit_atlas".into(),
         BundleRecord {
             content_hash: u64::MAX,
+            size: 123_456,
             result: Ok(Arc::new(contents)),
         },
     );
@@ -243,6 +244,7 @@ fn index_file_round_trips() {
         "broken".into(),
         BundleRecord {
             content_hash: 7,
+            size: 0,
             result: Err("bad header".into()),
         },
     );
@@ -250,6 +252,7 @@ fn index_file_round_trips() {
         "older".into(),
         BundleRecord {
             content_hash: 8,
+            size: 1,
             result: Ok(Arc::new(BundleContents {
                 unity_version: "2022.3.1f1".into(),
                 kinds: AssetKinds::EMPTY,
@@ -660,6 +663,7 @@ fn record(hash: u64, assets: Vec<IndexedAsset>) -> BundleRecord {
     let kinds = assets.iter().map(|a| a.kind).collect();
     BundleRecord {
         content_hash: hash,
+        size: 4096,
         result: Ok(Arc::new(BundleContents {
             unity_version: "6000.3.17f1".into(),
             kinds,
@@ -883,4 +887,193 @@ fn asset_kinds_set_operations() {
         assert_eq!(kind_from_code(u64::from(kind_code(kind))), Some(kind));
     }
     assert_eq!(kind_from_code(8), None);
+}
+
+#[test]
+fn probes_index_the_same_assets_as_a_full_listing() {
+    // Names are read only for kinds search lists, which must not change an
+    // entry: compare with listing every name of the whole file.
+    let names = [
+        "charui_bossk",
+        "unit_details_atlas",
+        "territoryui_view_standard_atlas",
+        "shared_uicontainer",
+        "char_bossk_pre",
+        "relic_rfl_bossk",
+        "vanity_bossk",
+        "abilityui_passive_summon",
+    ];
+    let Some((transport, packages)) = serve(100_054, &names) else {
+        return;
+    };
+    let dir = TempDir::new("index-full-listing");
+    let cache = cache(&dir, &transport);
+    let IndexRun { index, .. } = run(&builder(&cache, &manifest(100_054, packages)));
+    for name in names {
+        let bytes = fixture(&format!("{name}.bundle")).unwrap();
+        let ae3_unity::Probe::Listed(listing) =
+            ae3_unity::probe_prefix(&bytes, bytes.len() as u64).unwrap()
+        else {
+            panic!("{name} lists from the whole file");
+        };
+        let full = BundleContents::from_listing(&listing);
+        let indexed = index.package(name).unwrap().contents().unwrap();
+        assert_eq!(indexed.assets, full.assets, "{name}");
+        assert_eq!(indexed.kinds, full.kinds, "{name}");
+        assert!(indexed.prefix_len <= full.prefix_len, "{name}");
+    }
+}
+
+#[test]
+fn an_engine_rebuild_probes_each_bundle_in_one_request() {
+    let names = ["shared_uicontainer", "char_bossk_pre"];
+    let Some((cdn, old)) = serve(100_054, &names) else {
+        return;
+    };
+    let dir = TempDir::new("index-predicted");
+    let c = cache(&dir, &cdn);
+    run(&builder(&c, &manifest(100_054, old.clone())));
+    for package in &old {
+        assert!(cdn.ranges_for(&url(100_054, package)).len() >= 2);
+    }
+    let stored = IndexFile::load(
+        &default_index_path(dir.path(), Platform::Windows),
+        Platform::Windows,
+    )
+    .unwrap();
+    for package in &old {
+        assert_eq!(stored.get(&package.name).unwrap().size, package.size);
+    }
+
+    // The same bytes at new Content Hashes: each probe fetches what the last
+    // one needed (plus a margin) and is done.
+    let rebuilt: Vec<Package> = old
+        .iter()
+        .map(|p| Package {
+            content_hash: p.content_hash + 1,
+            ..p.clone()
+        })
+        .collect();
+    let m = manifest(100_055, rebuilt.clone());
+    let cdn = {
+        let fresh = FakeTransport::default();
+        for (name, package) in names.iter().zip(&rebuilt) {
+            fresh.put(
+                &url(100_055, package),
+                &fixture(&format!("{name}.bundle")).unwrap(),
+            );
+        }
+        Arc::new(fresh)
+    };
+    let c = cache(&dir, &cdn);
+    let IndexRun { report, index } = run(&IndexBuilder::new(
+        Arc::clone(&c),
+        location(100_055),
+        Platform::Windows,
+        m.clone(),
+    ));
+    assert_eq!((report.probed, report.requests), (2, 2));
+    for package in &rebuilt {
+        let ranges = cdn.ranges_for(&url(100_055, package));
+        let needed = index
+            .package(&package.name)
+            .unwrap()
+            .contents()
+            .unwrap()
+            .prefix_len;
+        assert_eq!(ranges.len(), 1, "{}", package.name);
+        assert!(ranges[0].1 + 1 >= needed);
+        assert!(
+            ranges[0].1 + 1 < package.size,
+            "{} fetched whole",
+            package.name
+        );
+    }
+
+    // Without prediction, every probe starts small again.
+    let unpredicted =
+        IndexBuilder::new(c, location(100_055), Platform::Windows, m).with_options(IndexOptions {
+            reprobe_all: true,
+            predict_first_probe: false,
+            ..IndexOptions::default()
+        });
+    assert!(run(&unpredicted).report.requests >= 4);
+}
+
+/// `file` as format version 1 wrote it: no Record sizes.
+fn version_1_bytes(file: &IndexFile) -> Vec<u8> {
+    let mut sizeless = IndexFile::new(file.platform());
+    sizeless.set_asset_version(file.asset_version());
+    for (name, record) in file.records() {
+        sizeless.insert(
+            name.to_owned(),
+            BundleRecord {
+                size: 0,
+                ..record.clone()
+            },
+        );
+    }
+    let mut bytes = sizeless.encode();
+    bytes[8] = 1;
+    bytes
+}
+
+#[test]
+fn a_version_1_index_is_read_and_upgraded() {
+    let Some((transport, packages)) = serve(100_054, &["charui_bossk"]) else {
+        return;
+    };
+    let dir = TempDir::new("index-v1");
+    let c = cache(&dir, &transport);
+    let m = manifest(100_054, packages);
+    let path = default_index_path(dir.path(), Platform::Windows);
+    let built = IndexFile::load(&run(&builder(&c, &m)).report.path, Platform::Windows).unwrap();
+    assert!(built.is_current_format());
+    assert_eq!(std::fs::read(&path).unwrap()[8], 2, "written as version 2");
+
+    std::fs::write(&path, version_1_bytes(&built)).unwrap();
+    let old = IndexFile::load(&path, Platform::Windows).unwrap();
+    assert!(!old.is_current_format());
+    assert_eq!(old.get("charui_bossk").unwrap().size, 0);
+    assert_eq!(
+        old.get("charui_bossk").unwrap().result,
+        built.get("charui_bossk").unwrap().result,
+        "the entries carry over"
+    );
+
+    // Nothing needs probing, but the file is written back as version 2.
+    let requests = transport.total_requests();
+    let report = run(&builder(&c, &m)).report;
+    assert_eq!((report.probed, report.saves), (0, 1));
+    assert_eq!(transport.total_requests(), requests);
+    assert_eq!(std::fs::read(&path).unwrap()[8], 2);
+    assert!(
+        IndexFile::load(&path, Platform::Windows)
+            .unwrap()
+            .is_current_format()
+    );
+}
+
+#[test]
+fn an_index_of_a_newer_format_is_rebuilt() {
+    let Some((transport, packages)) = serve(100_054, &["charui_bossk"]) else {
+        return;
+    };
+    let dir = TempDir::new("index-newer");
+    let c = cache(&dir, &transport);
+    let m = manifest(100_054, packages);
+    let path = run(&builder(&c, &m)).report.path;
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[8] = 3;
+    std::fs::write(&path, bytes).unwrap();
+    assert!(matches!(
+        IndexFile::load(&path, Platform::Windows),
+        Err(IndexError::Corrupt { .. })
+    ));
+
+    let IndexRun { report, index } = run(&builder(&c, &m));
+    assert!(report.discarded_index.is_some());
+    assert_eq!(report.probed, 1);
+    assert!(index.coverage().is_complete());
+    assert_eq!(std::fs::read(&path).unwrap()[8], 2);
 }

@@ -2,13 +2,19 @@
 //! that searching for an Asset by name finds its Bundles (ADR-0007).
 //!
 //! The index is built by range-probing every Bundle of a Manifest: only the
-//! first few kilobytes of each file are fetched, enough for ae3-unity's
-//! [`probe_prefix`](ae3_unity::probe_prefix) to list its Assets. Results are
-//! kept per Bundle with the Content Hash they were probed at, in one compact
-//! file per Platform under the cache directory ([`default_index_path`]). A new
-//! Asset Version therefore only probes the Bundles whose Content Hash changed;
-//! after an Engine Rebuild that is nearly all of them. Audio Packages hold no
-//! Unity Assets and are indexed by name only.
+//! start of each file is fetched, as much as ae3-unity's
+//! [`probe_prefix_filtered`](ae3_unity::probe_prefix_filtered) needs to list
+//! its Assets and the names of the kinds search matches. That is a few
+//! kilobytes for texture and icon Bundles, but most of the SerializedFile for
+//! prefabs, whose named objects are spread all through it: over a whole
+//! Manifest a little under half of the bytes. How much to fetch first is
+//! predicted from earlier probes, so most Bundles take one request. Results
+//! are kept per Bundle with the Content Hash and size they were probed at, in
+//! one compact file per Platform under the cache directory
+//! ([`default_index_path`]). A new Asset Version therefore only probes the
+//! Bundles whose Content Hash changed; after an Engine Rebuild that is nearly
+//! all of them, each predicted from what it needed before. Audio Packages
+//! hold no Unity Assets and are indexed by name only.
 //!
 //! - [`IndexBuilder`] probes what is missing, in parallel, saving as it goes
 //!   so that a cancelled or crashed run resumes where it stopped.
@@ -18,6 +24,7 @@
 
 mod build;
 mod file;
+mod predict;
 mod search;
 
 use std::fmt;
@@ -25,7 +32,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ae3_unity::{CLASS_MONO_BEHAVIOUR, CLASS_MONO_SCRIPT, ProbeListing};
+use ae3_unity::{CLASS_MONO_BEHAVIOUR, CLASS_MONO_SCRIPT, ObjectInfo, ProbeListing};
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
 use thiserror::Error;
@@ -277,6 +284,15 @@ impl BundleContents {
             assets,
         }
     }
+}
+
+/// Whether the index needs an object's `m_Name`: every kind search lists,
+/// plus MonoScripts, which tell NGUI Atlases apart. Skipping the rest (scene
+/// plumbing such as GameObjects and Transforms) changes no index entry, and
+/// lets a probe stop once the last needed name is decoded.
+fn wants_name(object: &ObjectInfo) -> bool {
+    object.class_id == CLASS_MONO_SCRIPT
+        || kind_of_class(object.class_id, &object.type_name) != AssetKind::Other
 }
 
 fn is_atlas_name(name: &str) -> bool {
@@ -535,5 +551,7 @@ impl AssetIndex {
     }
 }
 
+#[cfg(test)]
+mod bench;
 #[cfg(test)]
 mod tests;

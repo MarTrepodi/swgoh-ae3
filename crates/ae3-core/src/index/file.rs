@@ -9,12 +9,25 @@
 //!             3 repeated unity_version: string, 4 repeated Record }
 //! Record    { 1 name, 2 content_hash: u64, 3 unity_version: index into the
 //!             IndexFile's list, 4 kinds: bit set, 5 object_count,
-//!             6 prefix_len, 7 repeated Asset, 8 error: string (failed probe) }
+//!             6 prefix_len, 7 repeated Asset, 8 error: string (failed probe),
+//!             9 size: u64 (since version 2) }
 //! Asset     { 1 path_id: zigzag i64, 2 kind, 3 name }
 //! ```
 //!
 //! Kinds are coded by their position in [`AssetKind::ALL`]. Unknown fields
 //! are skipped, so later versions may add fields without a format bump.
+//!
+//! Format versions:
+//! - 1: the first.
+//! - 2: adds each Record's `size`, so that later builds can predict how much
+//!   of a changed Bundle to fetch; `prefix_len` counts only what the index
+//!   needs (names of searchable kinds). The entries themselves are the same,
+//!   so a version 1 file is read as is, with sizes unknown, and written back
+//!   as version 2.
+//!
+//! A file of a newer version than this build knows is reported as
+//! [`IndexError::Corrupt`], and [`IndexBuilder::run`](super::IndexBuilder::run)
+//! starts that index afresh.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,24 +43,43 @@ use crate::version::AssetVersion;
 use crate::wire::{DecodeError, Reader, Tag, WireType, expect_wire_type};
 
 const MAGIC: &[u8; 8] = b"AE3INDEX";
-const FORMAT_VERSION: u8 = 1;
+/// The version this build writes.
+const FORMAT_VERSION: u8 = 2;
+/// The oldest version this build reads.
+const OLDEST_FORMAT_VERSION: u8 = 1;
 
 /// The probe result of one Bundle at one Content Hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleRecord {
     pub content_hash: u64,
+    /// The Bundle's size when it was probed; 0 when unknown (records from
+    /// format version 1).
+    pub size: u64,
     /// What the probe found, or why it failed for good.
     pub result: Result<Arc<BundleContents>, String>,
 }
 
 /// The persisted Asset Index of one Platform.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct IndexFile {
     platform: Platform,
     /// The Asset Version of the Manifest last indexed.
     asset_version: AssetVersion,
     records: HashMap<String, BundleRecord>,
+    /// The format version the file was read in.
+    read_version: u8,
 }
+
+/// Equal when the indexes are, whatever format version each was read in.
+impl PartialEq for IndexFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.platform == other.platform
+            && self.asset_version == other.asset_version
+            && self.records == other.records
+    }
+}
+
+impl Eq for IndexFile {}
 
 impl IndexFile {
     /// An empty index.
@@ -57,6 +89,7 @@ impl IndexFile {
             platform,
             asset_version: AssetVersion::default(),
             records: HashMap::new(),
+            read_version: FORMAT_VERSION,
         }
     }
 
@@ -95,6 +128,13 @@ impl IndexFile {
     #[must_use]
     pub fn platform(&self) -> Platform {
         self.platform
+    }
+
+    /// Whether the file was read in the format version this build writes,
+    /// or created new; false for a file that saving would upgrade.
+    #[must_use]
+    pub fn is_current_format(&self) -> bool {
+        self.read_version == FORMAT_VERSION
     }
 
     /// The Asset Version of the Manifest last indexed into this file.
@@ -183,6 +223,9 @@ impl IndexFile {
             rec.clear();
             put_str(&mut rec, 1, name);
             put_varint_field(&mut rec, 2, record.content_hash);
+            if record.size > 0 {
+                put_varint_field(&mut rec, 9, record.size);
+            }
             match &record.result {
                 Ok(c) => {
                     put_varint_field(&mut rec, 3, version_ids[c.unity_version.as_str()]);
@@ -216,7 +259,7 @@ impl IndexFile {
         let (&version, body) = body
             .split_first()
             .ok_or_else(|| corrupt("missing the format version".to_owned()))?;
-        if version != FORMAT_VERSION {
+        if !(OLDEST_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
             return Err(corrupt(format!("unsupported format version {version}")));
         }
         let decoded = decode_body(body).map_err(|e| corrupt(e.to_string()))?;
@@ -231,6 +274,7 @@ impl IndexFile {
             platform,
             asset_version: decoded.asset_version,
             records: decoded.records,
+            read_version: version,
         })
     }
 }
@@ -276,6 +320,7 @@ struct Decoded {
 struct RawRecord {
     name: String,
     content_hash: u64,
+    size: u64,
     unity_version: Option<u64>,
     kinds: u8,
     object_count: u32,
@@ -324,6 +369,7 @@ fn decode_body(buf: &[u8]) -> Result<Decoded, DecodeError> {
                 rec.name,
                 BundleRecord {
                     content_hash: rec.content_hash,
+                    size: rec.size,
                     result,
                 },
             )
@@ -341,6 +387,7 @@ fn decode_record(mut r: Reader<'_>) -> Result<RawRecord, DecodeError> {
     let mut rec = RawRecord {
         name: String::new(),
         content_hash: 0,
+        size: 0,
         unity_version: None,
         kinds: 0,
         object_count: 0,
@@ -366,6 +413,7 @@ fn decode_record(mut r: Reader<'_>) -> Result<RawRecord, DecodeError> {
                 }
             }
             8 => rec.error = Some(string(&mut r, tag, MSG, "error")?),
+            9 => rec.size = varint(&mut r, tag, MSG, "size")?,
             _ => r.skip(tag.wire_type)?,
         }
     }
