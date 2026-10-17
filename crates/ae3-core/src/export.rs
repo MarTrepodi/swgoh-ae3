@@ -12,7 +12,12 @@
 //!
 //! Textures and native Sprites become images; Atlases are cut into their
 //! Sprites (with Atlas Cutting on) or written as JSON; Structured Assets
-//! become JSON; TextAssets keep their bytes under a sniffed extension; Meshes
+//! become JSON as [`ExportOptions::structured`] says: by default all of a
+//! Bundle's go into one `{bundle}.structured.json` beside its other files
+//! (an object keyed by the file stem each would get on its own), or each gets
+//! its own file, or none are written. Structured Assets picked by path id are
+//! always written as their own files. TextAssets keep their bytes under a
+//! sniffed extension; Meshes
 //! become Wavefront OBJ (X negated and windings reversed, as swgoh-ae2 wrote
 //! them). Scene plumbing such as Transforms is counted in
 //! [`ExportReport::ignored`] unless asked for by path id, when it is written
@@ -26,13 +31,15 @@
 //! written under a temporary name and renamed.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ae3_audio::Sound;
 use ae3_image::{PngCompression, RgbaImage};
+use ae3_unity::Value;
 use serde::Serialize;
 
 use crate::audio::{LoadedAudioPackage, sound_extension};
@@ -40,7 +47,7 @@ use crate::bundle::{
     AssetInfo, AssetKind, AssetRef, Atlas, AtlasTexture, BundleView, LoadedBundle, SpriteRect,
     cut_sprite,
 };
-use crate::config::{AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout};
+use crate::config::{AudioFormat, Config, DEFAULT_OUTPUT_DIR, ImageFormat, Layout, StructuredMode};
 use crate::download::DEFAULT_PARALLEL_DOWNLOADS;
 use crate::error::AssetError;
 use crate::guard::catch_panic;
@@ -50,6 +57,8 @@ use crate::manifest::category_of;
 /// `_{path_id}` suffix and an extension within common 255-byte limits.
 const MAX_STEM_BYTES: usize = 160;
 const PART_SUFFIX: &str = ".ae3-part";
+/// What follows a Bundle's name in its combined Structured Assets file name.
+pub const COMBINED_STRUCTURED_SUFFIX: &str = ".structured.json";
 /// Names Windows reserves for devices, with or without an extension.
 const RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -72,6 +81,8 @@ pub struct ExportOptions {
     pub layout: Layout,
     /// Leave existing files alone instead of overwriting them.
     pub skip_existing: bool,
+    /// How whole-Bundle exports write Structured Assets.
+    pub structured: StructuredMode,
     /// Packages exported at once by a batch; at least 1.
     pub parallel: usize,
 }
@@ -95,6 +106,7 @@ impl ExportOptions {
             audio_format: AudioFormat::default(),
             layout: Layout::default(),
             skip_existing: false,
+            structured: StructuredMode::default(),
             parallel: DEFAULT_PARALLEL_DOWNLOADS,
         }
     }
@@ -112,6 +124,7 @@ impl ExportOptions {
             audio_format: config.audio_format,
             layout: config.layout,
             skip_existing: config.skip_existing,
+            structured: config.structured,
             parallel: config.parallel_downloads.max(1),
         }
     }
@@ -136,6 +149,14 @@ impl ExportOptions {
         }
     }
 
+    /// The file a Bundle's combined Structured Assets go to, relative to the
+    /// output directory: `{bundle dir}/{bundle}.structured.json`.
+    #[must_use]
+    pub fn combined_structured_file(&self, category: &str, package: &str) -> PathBuf {
+        self.bundle_dir(category, package)
+            .join(combined_structured_name(package))
+    }
+
     /// The directory an Audio Package's sounds go to, relative to the output
     /// directory: `{category}/{audio package}` in every layout.
     #[must_use]
@@ -148,6 +169,14 @@ impl From<&Config> for ExportOptions {
     fn from(config: &Config) -> Self {
         Self::from_config(config)
     }
+}
+
+/// The file name of a Bundle's combined Structured Assets.
+fn combined_structured_name(package: &str) -> String {
+    format!(
+        "{}{COMBINED_STRUCTURED_SUFFIX}",
+        sanitize_file_name(package)
+    )
 }
 
 /// Makes `name` safe as a file name on Windows, macOS and Linux: path
@@ -246,7 +275,9 @@ pub struct ExportReport {
     pub skipped: Vec<SkippedAsset>,
     pub errors: Vec<ExportFailure>,
     /// Assets of kinds that are never exported (Transforms, GameObjects,
-    /// MonoScripts and the like), counted rather than listed.
+    /// MonoScripts and the like), plus Structured Assets when
+    /// [`ExportOptions::structured`] is [`StructuredMode::None`], counted
+    /// rather than listed.
     pub ignored: usize,
     /// Packages finished, whether or not every Asset succeeded.
     pub packages_done: usize,
@@ -404,6 +435,8 @@ enum Action {
     Image,
     Atlas,
     Json,
+    /// An entry in the Bundle's combined Structured Assets file.
+    Combined,
     Text(&'static str),
     AudioClip(&'static str),
     Mesh,
@@ -421,7 +454,7 @@ impl Action {
     fn extension<'e>(&'e self, image_ext: &'e str) -> &'e str {
         match self {
             Self::Image => image_ext,
-            Self::Json | Self::Atlas => "json",
+            Self::Json | Self::Atlas | Self::Combined => "json",
             Self::Text(ext) | Self::AudioClip(ext) => ext,
             Self::Mesh => "obj",
             Self::Skip(_) => "",
@@ -444,9 +477,11 @@ fn kind_rank(kind: AssetKind) -> u8 {
 
 /// Assigns each planned Asset a unique, case-insensitive file stem within
 /// its namespace (`sprites/` for cut Atlases, the Package directory for the
-/// rest). Input must be in priority order.
-fn assign_stems(planned: &mut [Planned<'_>], image_ext: &str) {
-    let mut taken: HashSet<String> = HashSet::new();
+/// rest), avoiding the `reserved` file names. Input must be in priority
+/// order. Combined Structured Assets get the stems they would have as their
+/// own files, which become their keys in the combined file.
+fn assign_stems(planned: &mut [Planned<'_>], image_ext: &str, reserved: Option<&str>) {
+    let mut taken: HashSet<String> = reserved.into_iter().map(str::to_lowercase).collect();
     for p in planned {
         if matches!(p.action, Action::Skip(_)) {
             continue;
@@ -611,9 +646,17 @@ impl<'a> Batch<'a> {
             }
         }
         planned.sort_by_key(|p| (kind_rank(p.info.kind), p.info.path_id));
-        assign_stems(&mut planned, self.image_ext());
+        let combined_name = planned
+            .iter()
+            .any(|p| matches!(p.action, Action::Combined))
+            .then(|| combined_structured_name(package));
+        assign_stems(&mut planned, self.image_ext(), combined_name.as_deref());
 
         let dir = self.options.bundle_dir(bundle.category(), package);
+        let mut combined = match combined_name {
+            Some(file) => self.open_combined(&dir.join(file), package),
+            None => Combined::Unused,
+        };
         let total = planned.len();
         for (done, p) in planned.iter().enumerate() {
             if self.is_cancelled() {
@@ -621,19 +664,42 @@ impl<'a> Batch<'a> {
                 break;
             }
             let name = p.info.display_name();
-            let result = catch_panic(|| self.export_asset(&view, &dir, p, &name, &mut report))
-                .unwrap_or_else(|message| {
-                    Err(AssetError::panicked(format!(
-                        "{package}: Asset {}",
-                        p.info.path_id
-                    ))(message))
-                });
+            let result = catch_panic(|| {
+                self.export_asset(&view, &dir, p, &name, &mut combined, &mut report)
+            })
+            .unwrap_or_else(|message| {
+                Err(AssetError::panicked(format!(
+                    "{package}: Asset {}",
+                    p.info.path_id
+                ))(message))
+            });
             if let Err(e) = result {
                 report.failure(package, Some((&name, Some(p.info.path_id))), &e);
             }
             self.asset_finished(package, &name, done + 1, total);
         }
+        // A cancelled export drops the file unfinished, which removes it.
+        if let Combined::Writing(json) = combined
+            && !report.cancelled
+        {
+            match json.finish() {
+                Ok(Some(written)) => report.written.push(written),
+                Ok(None) => {}
+                Err(e) => report.failure(package, None, &e),
+            }
+        }
         report
+    }
+
+    /// Prepares the combined Structured Assets file `rel` of `package`.
+    fn open_combined(&self, rel: &Path, package: &str) -> Combined {
+        let rel = self.claimed(rel, package, "dup");
+        let path = self.options.output_dir.join(&rel);
+        if self.options.skip_existing && path.exists() {
+            Combined::Exists(rel)
+        } else {
+            Combined::Writing(CombinedJson::new(path, package))
+        }
     }
 
     fn image_ext(&self) -> &'static str {
@@ -657,7 +723,14 @@ impl<'a> Batch<'a> {
             AssetKind::Atlas if self.options.atlas_cutting && info.sprite_count != Some(0) => {
                 Action::Atlas
             }
-            AssetKind::Atlas | AssetKind::Structured => Action::Json,
+            AssetKind::Atlas => Action::Json,
+            // Assets picked by path id get their own files.
+            AssetKind::Structured | AssetKind::Other if explicit => Action::Json,
+            AssetKind::Structured => match self.options.structured {
+                StructuredMode::Separate => Action::Json,
+                StructuredMode::Combined => Action::Combined,
+                StructuredMode::None => return None,
+            },
             AssetKind::Text => {
                 Action::Text(view.text(info.path_id).map_or("bytes", |t| t.extension))
             }
@@ -666,7 +739,6 @@ impl<'a> Batch<'a> {
                     .map_or("bin", |clip| clip.extension),
             ),
             AssetKind::Mesh => Action::Mesh,
-            AssetKind::Other if explicit => Action::Json,
             AssetKind::Other => return None,
         })
     }
@@ -677,12 +749,22 @@ impl<'a> Batch<'a> {
         dir: &Path,
         p: &Planned<'_>,
         name: &str,
+        combined: &mut Combined,
         report: &mut ExportReport,
     ) -> Result<(), AssetError> {
         let package = view.loaded().name();
         let path_id = p.info.path_id;
         let file = |ext: &str| dir.join(format!("{}.{ext}", p.stem));
         match &p.action {
+            Action::Combined => match combined {
+                Combined::Writing(json) => json.push(&p.stem, p.info, &view.structured(path_id)?),
+                Combined::Exists(rel) => {
+                    self.skip_existing(report, package, name, Some(path_id), rel);
+                    Ok(())
+                }
+                // Not reached: Combined Assets always open the file.
+                Combined::Unused => Ok(()),
+            },
             Action::Skip(detail) => {
                 report.skipped.push(SkippedAsset {
                     package: package.to_owned(),
@@ -1065,6 +1147,148 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), AssetError> {
     Ok(())
 }
 
+/// The state of a Bundle's combined Structured Assets file.
+enum Combined {
+    /// The Bundle has no Structured Asset to combine.
+    Unused,
+    /// The file (relative to the output directory) exists and skip-existing
+    /// is set.
+    Exists(PathBuf),
+    Writing(CombinedJson),
+}
+
+/// One combined Structured Assets entry: the Asset's identity plus its data.
+#[derive(Serialize)]
+struct CombinedEntry<'a> {
+    path_id: i64,
+    name: &'a str,
+    class_name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script_class: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    container_path: Option<&'a str>,
+    data: &'a Value,
+}
+
+/// A combined Structured Assets file being written: a JSON object streamed
+/// entry by entry to a temporary file, opened at the first entry and renamed
+/// into place by [`CombinedJson::finish`]. Dropping it unfinished removes the
+/// temporary file.
+struct CombinedJson {
+    path: PathBuf,
+    part: PathBuf,
+    package: String,
+    out: Option<BufWriter<File>>,
+    entries: usize,
+    /// The write error that ruined the file, repeated for later entries.
+    broken: Option<(io::ErrorKind, String)>,
+}
+
+impl CombinedJson {
+    fn new(path: PathBuf, package: &str) -> Self {
+        let mut part = path.as_os_str().to_owned();
+        part.push(PART_SUFFIX);
+        Self {
+            path,
+            part: PathBuf::from(part),
+            package: package.to_owned(),
+            out: None,
+            entries: 0,
+            broken: None,
+        }
+    }
+
+    /// Appends one Asset under `key`.
+    fn push(&mut self, key: &str, info: &AssetInfo, data: &Value) -> Result<(), AssetError> {
+        if let Some((kind, message)) = &self.broken {
+            return Err(AssetError::io(&self.path)(io::Error::new(
+                *kind,
+                message.clone(),
+            )));
+        }
+        let entry = serde_json::to_vec_pretty(&CombinedEntry {
+            path_id: info.path_id,
+            name: &info.name,
+            class_name: &info.class_name,
+            script_class: info.script_class.as_deref(),
+            container_path: info.container_path.as_deref(),
+            data,
+        })?;
+        let key = serde_json::to_vec(key)?;
+        self.write_entry(&key, &entry).map_err(|e| {
+            self.broken = Some((e.kind(), e.to_string()));
+            AssetError::io(&self.path)(e)
+        })?;
+        self.entries += 1;
+        Ok(())
+    }
+
+    fn write_entry(&mut self, key: &[u8], entry: &[u8]) -> io::Result<()> {
+        let first = self.out.is_none();
+        let out = if let Some(out) = &mut self.out {
+            out
+        } else {
+            if let Some(parent) = self.part.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            self.out.insert(BufWriter::new(File::create(&self.part)?))
+        };
+        out.write_all(if first { b"{\n  " } else { b",\n  " })?;
+        out.write_all(key)?;
+        out.write_all(b": ")?;
+        // Indent the entry one level; JSON strings never hold a raw newline.
+        for (i, line) in entry.split(|&b| b == b'\n').enumerate() {
+            if i > 0 {
+                out.write_all(b"\n  ")?;
+            }
+            out.write_all(line)?;
+        }
+        Ok(())
+    }
+
+    /// Closes the object and renames the file into place; `None` when no
+    /// entry was written.
+    fn finish(mut self) -> Result<Option<WrittenFile>, AssetError> {
+        let Some(mut out) = self.out.take() else {
+            return Ok(None);
+        };
+        let closed = out
+            .write_all(b"\n}\n")
+            .and_then(|()| out.into_inner().map_err(io::IntoInnerError::into_error))
+            // The file is closed before the rename, as Windows requires.
+            .and_then(|file| file.metadata())
+            .and_then(|meta| fs::rename(&self.part, &self.path).map(|()| meta.len()));
+        match closed {
+            Ok(bytes) => Ok(Some(WrittenFile {
+                asset: self
+                    .path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+                path: self.path.clone(),
+                package: self.package.clone(),
+                bytes,
+                note: Some(format!(
+                    "{} Structured Asset{} combined",
+                    self.entries,
+                    if self.entries == 1 { "" } else { "s" }
+                )),
+            })),
+            Err(e) => {
+                let _ = fs::remove_file(&self.part);
+                Err(AssetError::io(&self.path)(e))
+            }
+        }
+    }
+}
+
+impl Drop for CombinedJson {
+    fn drop(&mut self) {
+        if self.out.take().is_some() {
+            let _ = fs::remove_file(&self.part);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,7 +1349,7 @@ mod tests {
             })
             .collect();
         planned.sort_by_key(|p| (kind_rank(p.info.kind), p.info.path_id));
-        assign_stems(&mut planned, "png");
+        assign_stems(&mut planned, "png", None);
         let stems: Vec<(i64, &str)> = planned
             .iter()
             .map(|p| (p.info.path_id, p.stem.as_str()))
@@ -1272,6 +1496,54 @@ mod tests {
             sprite_file_names(&atlas, "png"),
             ["icon.png", "ICON_1.png", "x_y.png"]
         );
+    }
+
+    #[test]
+    fn combined_json_streams_an_indented_object() {
+        let dir = crate::test_support::TempDir::new("export-combined");
+        let path = dir.path().join("cat/b/b.structured.json");
+        let json = CombinedJson::new(path.clone(), "b");
+        assert_eq!(json.finish().unwrap(), None, "no entry, no file");
+        assert!(!path.exists());
+
+        let mut json = CombinedJson::new(path.clone(), "b");
+        let mut named = info(-2, "a\nb", AssetKind::Structured);
+        named.script_class = Some("Ladder".into());
+        let mut map = ae3_unity::Map::default();
+        map.push("x", Value::Array(vec![Value::Int(1), Value::Int(2)]));
+        map.push("s", Value::String("line\nbreak".into()));
+        let data = Value::Map(map);
+        json.push("a_b", &named, &data).unwrap();
+        let unnamed = info(4, "", AssetKind::Structured);
+        json.push("X_4", &unnamed, &Value::Int(7)).unwrap();
+        assert!(path.with_extension("json.ae3-part").exists());
+        let written = json.finish().unwrap().unwrap();
+        assert!(!path.with_extension("json.ae3-part").exists());
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(written.bytes, text.len() as u64);
+        assert_eq!(
+            written.note.as_deref(),
+            Some("2 Structured Assets combined")
+        );
+        assert!(
+            text.starts_with("{\n  \"a_b\": {\n    \"path_id\": -2,"),
+            "{text}"
+        );
+        assert!(text.ends_with("\n  }\n}\n"), "{text}");
+        let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["a_b"]["name"], "a\nb");
+        assert_eq!(parsed["a_b"]["script_class"], "Ladder");
+        assert_eq!(parsed["a_b"]["data"]["s"], "line\nbreak");
+        assert_eq!(parsed["X_4"]["data"], 7);
+        assert!(parsed["X_4"].get("script_class").is_none());
+
+        // Dropped unfinished, as on cancellation: no file is left behind.
+        let other = dir.path().join("cat/c/c.structured.json");
+        let mut json = CombinedJson::new(other.clone(), "c");
+        json.push("k", &named, &data).unwrap();
+        drop(json);
+        assert!(!other.exists());
+        assert!(!other.with_extension("json.ae3-part").exists());
     }
 
     #[test]
