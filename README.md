@@ -27,7 +27,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
   |---|---|
   | Images | PNG, or lossless WebP |
   | Sprite atlases | One image per sprite, plus a JSON file describing each sprite |
-  | Meshes | Wavefront OBJ, oriented as swgoh-ae2 wrote them, with normals, UVs and one group per submesh |
+  | Meshes | Wavefront OBJ, oriented as swgoh-ae2 wrote them, with normals, UVs and one group per submesh; or binary glTF (`.glb`) with the main texture embedded; or both |
   | Audio | Ogg Vorbis, WAV (Wwise PCM and PTADPCM), or the original Wwise data |
   | Structured data | JSON: by default one `{bundle}.structured.json` per bundle, or one file per asset |
   | Text | Original bytes |
@@ -119,9 +119,11 @@ ae3 diff 100052 --category charui --summary
 ae3 cache prune --max 2GB
 ```
 
-`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. Above them it lists the game entities (units, abilities, gear, materials and player portraits) whose display names match, best match first, each with the bundles it links to. The display names are rebuilt from the community gamedata on GitHub when it changes, about 25 MB of downloads that leave a cached index of about 0.5 MB; when GitHub is unreachable the cached names are used. `--names-only` matches bundle names and display names without the asset index, `--no-update` searches both indexes as they stand, `--no-display-names` leaves the game entities out, and `--language` picks the display-name language for one search. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting`, `--no-padding-restoration` and `--structured combined|separate|none`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
+`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. Above them it lists the game entities (units, abilities, gear, materials and player portraits) whose display names match, best match first, each with the bundles it links to. The display names are rebuilt from the community gamedata on GitHub when it changes, about 25 MB of downloads that leave a cached index of about 0.5 MB; when GitHub is unreachable the cached names are used. `--names-only` matches bundle names and display names without the asset index, `--no-update` searches both indexes as they stand, `--no-display-names` leaves the game entities out, and `--language` picks the display-name language for one search. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting`, `--no-padding-restoration`, `--structured combined|separate|none` and `--mesh-format obj|glb|both`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
 
 Structured assets are the MonoBehaviours and other Unity objects that are not images, atlases, meshes, text or audio. A category such as `conquest` holds tens of thousands of them, so by default (`--structured combined`) each bundle's structured assets go into one `{bundle}.structured.json` next to its other files. That file is a JSON object with one member per asset, keyed by the file name the asset would otherwise get (its name, with `_{path id}` added when two assets share a name). Each member holds the asset's `path_id`, `name`, `class_name`, `script_class` and `container_path` when known, and its `data`. `--structured separate` writes one `{asset}.json` per asset instead, as earlier releases did, and `--structured none` skips them. Assets picked with `--path-id` are always written as their own files.
+
+Meshes are written as OBJ by default. `--mesh-format glb` writes binary glTF instead, and `--mesh-format both` writes both files side by side. A `.glb` holds the same geometry as the OBJ (positions, normals, UVs and one primitive per submesh, mirrored into glTF's right-handed space), and each submesh's material carries the main texture its renderer uses, embedded as PNG. AE3 finds that texture through the renderer in the same bundle that draws the mesh and that renderer's material. When no renderer in the bundle draws the mesh, as in shared resource containers, or its material has no texture, the `.glb` holds the geometry only and the export report says why.
 
 `ae3 diff --category <name>` compares only that category's packages: the counts, sizes, changed share and engine-rebuild flag all describe that category, in text and `--json` output alike.
 
@@ -173,12 +175,13 @@ atlas-cutting = true
 padding-restoration = true
 skip-existing = false
 structured = "combined"       # combined, separate or none
+mesh-format = "obj"           # obj, glb or both
 no-cache = false
 language = "ENG_US"           # display-name search: ENG_US, FRE_FR, GER_DE, JPN_JP, ...
 check-for-updates = true      # GUI only: look for a new AE3 release once a day
 ```
 
-Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_NO_CACHE`, `AE3_LANGUAGE` and `AE3_CHECK_FOR_UPDATES`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED`, `AE3_MESH_FORMAT`, `AE3_NO_CACHE`, `AE3_LANGUAGE` and `AE3_CHECK_FOR_UPDATES`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
 
 With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whether a newer AE3 has been published, without slowing the window down, and shows "AE3 vX available" with a link to the release page. It never downloads or installs anything. The CLI never checks.
 

@@ -44,6 +44,7 @@ const CLASS_AUDIO_SOURCE: i32 = 82;
 const CLASS_AUDIO_CLIP: i32 = 83;
 const CLASS_ANIMATOR: i32 = 95;
 const CLASS_LIGHT: i32 = 108;
+const CLASS_SKINNED_MESH_RENDERER: i32 = 137;
 const CLASS_ANIMATION: i32 = 111;
 const CLASS_FONT: i32 = 128;
 const CLASS_PRELOAD_DATA: i32 = 150;
@@ -84,6 +85,8 @@ const OTHER_CLASSES: &[i32] = &[
 const MAX_REPLACEMENT_DEPTH: u8 = 4;
 /// How many dependency Bundles a cross-Bundle lookup searches at most.
 const MAX_DEPENDENCY_SEARCH: usize = 64;
+/// How many of the renderers drawing one Mesh are tried for its Materials.
+const MAX_MESH_RENDERERS: usize = 4;
 
 /// What an Asset is, for listing, preview and export.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -243,13 +246,51 @@ pub struct Atlas {
     pub sprites: Vec<SpriteRect>,
 }
 
-/// The texture an Atlas's Sprites are cut from.
+/// The texture an Atlas's Sprites are cut from, or a Material's main
+/// texture.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AtlasTexture {
     pub asset: AssetRef,
     pub name: String,
     #[serde(flatten)]
     pub info: TextureInfo,
+}
+
+/// A Material a Mesh is drawn with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MeshMaterial {
+    /// The Material Asset.
+    pub asset: AssetRef,
+    pub name: String,
+    /// Its `_MainTex` texture, else its first texture.
+    pub texture: Option<AtlasTexture>,
+    /// Why `texture` is missing, when it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub texture_error: Option<String>,
+}
+
+/// Which renderers of a Bundle draw each of its Meshes, from
+/// [`BundleView::mesh_renderers`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MeshRenderers {
+    /// Mesh path id -> its renderers, those with the fewest Materials in
+    /// other files first.
+    by_mesh: HashMap<i64, Vec<MeshRenderer>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MeshRenderer {
+    path_id: i64,
+    /// `m_Materials`: one per submesh.
+    materials: Vec<PPtr>,
+}
+
+impl MeshRenderers {
+    /// Whether a renderer in the Bundle draws the Mesh `path_id`.
+    #[must_use]
+    pub fn draws(&self, path_id: i64) -> bool {
+        self.by_mesh.contains_key(&path_id)
+    }
 }
 
 /// One Sprite of an NGUI Atlas, in the Atlas texture's pixel space with a
@@ -610,6 +651,12 @@ impl LoadedBundle {
     /// A Mesh's geometry.
     pub fn mesh(&self, path_id: i64) -> Result<Mesh, AssetError> {
         self.view()?.mesh(path_id)
+    }
+
+    /// The Materials a Mesh is drawn with; see [`BundleView::mesh_materials`].
+    pub fn mesh_materials(&self, path_id: i64) -> Result<Vec<Option<MeshMaterial>>, AssetError> {
+        let view = self.view()?;
+        view.mesh_materials(path_id, &view.mesh_renderers())
     }
 }
 
@@ -1071,7 +1118,11 @@ impl<'a> BundleView<'a> {
                 AssetError::malformed(package, material.path_id, "the Material has no _MainTex")
             })
         })?;
-        let texture = self.follow(&material, texture)?;
+        self.texture_at(&self.follow(&material, texture)?)
+    }
+
+    /// A Texture2D's identity, name and size.
+    fn texture_at(&self, texture: &Located) -> Result<AtlasTexture, AssetError> {
         let (name, info) = self.with_file(&texture.holder, &texture.node, |_, file, package| {
             let value = file
                 .read_object(texture.path_id)
@@ -1082,9 +1133,145 @@ impl<'a> BundleView<'a> {
             Ok((file.object_name(texture.path_id).unwrap_or_default(), info))
         })?;
         Ok(AtlasTexture {
-            asset: self.asset_ref(&texture),
+            asset: self.asset_ref(texture),
             name,
             info,
+        })
+    }
+
+    /// Which renderers draw each Mesh of this Bundle: a `SkinnedMeshRenderer`
+    /// names its Mesh, and a `MeshRenderer` draws the Mesh of its
+    /// GameObject's `MeshFilter`. Build it once for many
+    /// [`BundleView::mesh_materials`] calls.
+    #[must_use]
+    pub fn mesh_renderers(&self) -> MeshRenderers {
+        let local = |value: &Value, key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_pptr)
+                .filter(|p| p.is_local() && !p.is_null())
+                .map(|p| p.path_id)
+        };
+        let read = |class: i32| {
+            self.file
+                .objects_of_class(class)
+                .filter_map(|o| Some((o.path_id, self.file.read_object(o.path_id).ok()?)))
+        };
+        let renderer = |path_id: i64, value: &Value| MeshRenderer {
+            path_id,
+            materials: value
+                .get("m_Materials")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .map(|m| m.as_pptr().unwrap_or_default())
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
+        let filters: HashMap<i64, i64> = read(CLASS_MESH_FILTER)
+            .filter_map(|(_, v)| Some((local(&v, "m_GameObject")?, local(&v, "m_Mesh")?)))
+            .collect();
+        let mut by_mesh: HashMap<i64, Vec<MeshRenderer>> = HashMap::new();
+        for (path_id, value) in read(CLASS_MESH_RENDERER) {
+            if let Some(&mesh) = local(&value, "m_GameObject").and_then(|go| filters.get(&go)) {
+                by_mesh
+                    .entry(mesh)
+                    .or_default()
+                    .push(renderer(path_id, &value));
+            }
+        }
+        for (path_id, value) in read(CLASS_SKINNED_MESH_RENDERER) {
+            if let Some(mesh) = local(&value, "m_Mesh") {
+                by_mesh
+                    .entry(mesh)
+                    .or_default()
+                    .push(renderer(path_id, &value));
+            }
+        }
+        for list in by_mesh.values_mut() {
+            list.sort_by_key(|r| {
+                let elsewhere = r.materials.iter().filter(|m| !m.is_local()).count();
+                (elsewhere, r.path_id)
+            });
+        }
+        MeshRenderers { by_mesh }
+    }
+
+    /// The Materials the Mesh `path_id` is drawn with, one per submesh in
+    /// order, with their main textures; `None` marks an empty slot or one
+    /// that does not resolve. Of the renderers that draw the Mesh, the first
+    /// with a textured Material wins, trying those whose Materials are in
+    /// this Bundle first, so other Bundles are loaded only when needed.
+    /// Empty when no renderer in this Bundle draws the Mesh; an error when
+    /// none of the Materials resolve.
+    pub fn mesh_materials(
+        &self,
+        path_id: i64,
+        renderers: &MeshRenderers,
+    ) -> Result<Vec<Option<MeshMaterial>>, AssetError> {
+        let Some(candidates) = renderers.by_mesh.get(&path_id) else {
+            return Ok(Vec::new());
+        };
+        let mut fallback = None;
+        let mut first_error = None;
+        for r in candidates.iter().take(MAX_MESH_RENDERERS) {
+            let from = self.main_loc(r.path_id);
+            let materials: Vec<Option<MeshMaterial>> = r
+                .materials
+                .iter()
+                .map(|&pptr| {
+                    if pptr.is_null() {
+                        return None;
+                    }
+                    self.mesh_material(&from, pptr)
+                        .map_err(|e| first_error.get_or_insert(e))
+                        .ok()
+                })
+                .collect();
+            if materials.iter().flatten().any(|m| m.texture.is_some()) {
+                return Ok(materials);
+            }
+            if fallback.is_none() && materials.iter().any(Option::is_some) {
+                fallback = Some(materials);
+            }
+        }
+        match (fallback, first_error) {
+            (Some(materials), _) => Ok(materials),
+            (None, Some(e)) => Err(e),
+            (None, None) => Ok(Vec::new()),
+        }
+    }
+
+    /// A Material and its main texture.
+    fn mesh_material(&self, from: &Located, pptr: PPtr) -> Result<MeshMaterial, AssetError> {
+        let material = self.follow(from, pptr)?;
+        let (name, texture) =
+            self.with_file(&material.holder, &material.node, |_, file, package| {
+                let props = file
+                    .read_field(material.path_id, "m_SavedProperties")
+                    .map_err(AssetError::unity(package))?
+                    .ok_or_else(|| {
+                        AssetError::malformed(package, material.path_id, "not a Material")
+                    })?;
+                let name = file.object_name(material.path_id).unwrap_or_default();
+                Ok((name, main_texture(&props)))
+            })?;
+        let (texture, texture_error) = match texture {
+            None => (None, Some("the Material has no texture".to_owned())),
+            Some(texture) => match self
+                .follow(&material, texture)
+                .and_then(|t| self.texture_at(&t))
+            {
+                Ok(texture) => (Some(texture), None),
+                Err(e) => (None, Some(e.to_string())),
+            },
+        };
+        Ok(MeshMaterial {
+            asset: self.asset_ref(&material),
+            name,
+            texture,
+            texture_error,
         })
     }
 
