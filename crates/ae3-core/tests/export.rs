@@ -489,17 +489,25 @@ fn exports_assets_by_path_id_and_reports_progress() {
             &AtomicBool::new(false),
         )
         .unwrap();
-    // Meshes are listed but skipped with a reason.
-    assert_eq!(report.skipped.len(), 3);
-    assert!(report.skipped.iter().all(|s| matches!(
-        &s.reason,
-        SkipReason::Unsupported { detail } if detail.contains("mesh")
-    )));
+    assert!(report.skipped.is_empty(), "{:#?}", report.skipped);
     // An unknown path id is an error for that Asset only.
     assert_eq!(report.errors.len(), 1);
     assert_eq!(report.errors[0].path_id, Some(12_345));
-    // The texture as an image, and the Transform (asked for by id) as JSON.
-    assert_eq!(report.written.len(), 2);
+    // The Meshes as OBJ, the texture as an image, and the Transform (asked
+    // for by id) as JSON.
+    assert_eq!(report.written.len(), 5);
+    let obj = fs::read_to_string(f.out("char/char_bossk_pre/bossk_mesh.obj")).unwrap();
+    let count = |prefix: &str| obj.lines().filter(|l| l.starts_with(prefix)).count();
+    assert_eq!(
+        (count("v "), count("vt "), count("vn ")),
+        (1693, 1693, 1693)
+    );
+    assert_eq!(count("f "), 7506 / 3);
+    assert!(obj.starts_with("g bossk_mesh\n"));
+    assert!(obj.contains("\ng bossk_mesh_0\nf "));
+    for name in ["Bossk_weapon", "vfx_net_gun_01"] {
+        assert!(f.out(&format!("char/char_bossk_pre/{name}.obj")).exists());
+    }
     assert!(f.out("char/char_bossk_pre/rfl_bossk_tex.png").exists());
     let transform_json = f.out(&format!(
         "char/char_bossk_pre/Transform_{}.json",

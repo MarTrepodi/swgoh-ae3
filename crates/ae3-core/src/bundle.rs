@@ -26,6 +26,7 @@ use serde::{Serialize, Serializer};
 
 use crate::error::AssetError;
 use crate::manifest::category_of;
+use crate::mesh::{self, Mesh};
 use crate::sniff::{sniff_audio_extension, sniff_text_extension};
 
 const CLASS_GAME_OBJECT: i32 = 1;
@@ -99,7 +100,7 @@ pub enum AssetKind {
     /// A MonoBehaviour that is not an Atlas, or another data object read
     /// through its TypeTree (Materials, animation data and so on).
     Structured,
-    /// A `Mesh`; listed, not yet exported.
+    /// A `Mesh`.
     Mesh,
     /// A Unity `AudioClip` (SWGOH's sound lives in Audio Packages instead).
     Audio,
@@ -604,6 +605,11 @@ impl LoadedBundle {
     /// An AudioClip's raw data with a sniffed extension.
     pub fn audio_clip(&self, path_id: i64) -> Result<AudioClipData, AssetError> {
         self.view()?.audio_clip(path_id)
+    }
+
+    /// A Mesh's geometry.
+    pub fn mesh(&self, path_id: i64) -> Result<Mesh, AssetError> {
+        self.view()?.mesh(path_id)
     }
 }
 
@@ -1171,6 +1177,31 @@ impl<'a> BundleView<'a> {
             .to_vec();
         let extension = sniff_audio_extension(&bytes);
         Ok(AudioClipData { bytes, extension })
+    }
+
+    /// A Mesh's geometry, from its `m_CompressedMesh` or its vertex data
+    /// (inline or streamed from a `.resS` node).
+    pub fn mesh(&self, path_id: i64) -> Result<Mesh, AssetError> {
+        self.expect_kind(path_id, AssetKind::Mesh)?;
+        let package = self.package();
+        let value = self
+            .file
+            .read_object(path_id)
+            .map_err(AssetError::unity(package))?;
+        let stream = match value
+            .get("m_StreamData")
+            .and_then(StreamingInfo::from_value)
+        {
+            Some(stream) if !stream.is_empty() => Some(
+                self.loaded
+                    .bundle
+                    .resolve_stream(&stream)
+                    .map_err(AssetError::unity(package))?,
+            ),
+            _ => None,
+        };
+        mesh::decode(&value, stream)
+            .map_err(|detail| AssetError::malformed(package, path_id, detail))
     }
 }
 

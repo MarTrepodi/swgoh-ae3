@@ -10,6 +10,7 @@ pub mod diff;
 pub mod extract;
 pub mod jobs;
 pub mod lru;
+pub mod mesh;
 pub mod preview;
 pub mod selection;
 pub mod table;

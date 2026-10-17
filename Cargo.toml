@@ -21,6 +21,8 @@ serde_json = "1"
 thiserror = "2"
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 
+# ae3-gui repeats these with unsafe_code = "deny" for its OpenGL module;
+# keep its [lints] in step.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

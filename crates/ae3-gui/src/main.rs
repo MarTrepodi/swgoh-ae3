@@ -40,6 +40,8 @@ fn main() -> eframe::Result {
             .with_app_id("ae3-gui")
             .with_inner_size([1180.0, 780.0])
             .with_min_inner_size([720.0, 480.0]),
+        // The 3D Mesh view depth-tests against the window's framebuffer.
+        depth_buffer: 24,
         ..Default::default()
     };
     eframe::run_native(

@@ -12,8 +12,9 @@
 //!
 //! Textures and native Sprites become images; Atlases are cut into their
 //! Sprites (with Atlas Cutting on) or written as JSON; Structured Assets
-//! become JSON; TextAssets keep their bytes under a sniffed extension. Meshes
-//! are reported as skipped. Scene plumbing such as Transforms is counted in
+//! become JSON; TextAssets keep their bytes under a sniffed extension; Meshes
+//! become Wavefront OBJ (X negated and windings reversed, as swgoh-ae2 wrote
+//! them). Scene plumbing such as Transforms is counted in
 //! [`ExportReport::ignored`] unless asked for by path id, when it is written
 //! as JSON.
 //!
@@ -222,7 +223,7 @@ pub struct SkippedAsset {
 pub enum SkipReason {
     /// The file exists and [`ExportOptions::skip_existing`] is set.
     Exists { path: PathBuf },
-    /// AE3 cannot export this Asset yet, such as a Mesh.
+    /// AE3 cannot export this Asset, such as an empty texture.
     Unsupported { detail: String },
 }
 
@@ -405,6 +406,7 @@ enum Action {
     Json,
     Text(&'static str),
     AudioClip(&'static str),
+    Mesh,
     Skip(String),
 }
 
@@ -421,6 +423,7 @@ impl Action {
             Self::Image => image_ext,
             Self::Json | Self::Atlas => "json",
             Self::Text(ext) | Self::AudioClip(ext) => ext,
+            Self::Mesh => "obj",
             Self::Skip(_) => "",
         }
     }
@@ -662,7 +665,7 @@ impl<'a> Batch<'a> {
                 view.audio_clip(info.path_id)
                     .map_or("bin", |clip| clip.extension),
             ),
-            AssetKind::Mesh => Action::Skip("mesh export is not implemented yet".into()),
+            AssetKind::Mesh => Action::Mesh,
             AssetKind::Other if explicit => Action::Json,
             AssetKind::Other => return None,
         })
@@ -715,6 +718,11 @@ impl<'a> Batch<'a> {
             Action::AudioClip(ext) => {
                 self.write_with(package, name, Some(path_id), &file(ext), report, || {
                     Ok(view.audio_clip(path_id)?.bytes)
+                })
+            }
+            Action::Mesh => {
+                self.write_with(package, name, Some(path_id), &file("obj"), report, || {
+                    Ok(view.mesh(path_id)?.to_obj().into_bytes())
                 })
             }
             Action::Atlas => self.export_atlas(view, &dir.join("sprites"), p, name, report),

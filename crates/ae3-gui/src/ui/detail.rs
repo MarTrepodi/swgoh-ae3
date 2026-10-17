@@ -1,8 +1,9 @@
 //! The in-app detail viewer: textures with zoom, pan and channel toggles;
-//! Atlases with their Sprites outlined; Structured Assets as a tree; text
-//! with highlighting.
+//! Atlases with their Sprites outlined; Meshes in an orbiting 3D view;
+//! Structured Assets as a tree; text with highlighting.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use ae3_core::{SpriteRect, Value};
 use eframe::egui::{
@@ -25,6 +26,7 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
     let mut open = detail.open;
     let texture = app.detail_texture();
     let checker = app.checker(ctx);
+    let renderer = Arc::clone(&app.mesh_renderer);
     let mut remask = false;
     egui::Window::new(title)
         .id(egui::Id::unique("ae3-detail"))
@@ -71,6 +73,15 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
                     extension,
                     truncated,
                 })) => text_view(ui, text, extension, *truncated),
+                Some(Ok(DetailContent::Mesh(preview))) => {
+                    super::mesh::view(
+                        ui,
+                        &mut detail.camera,
+                        preview,
+                        detail.generation,
+                        &renderer,
+                    );
+                }
                 Some(Ok(DetailContent::Info(text))) => {
                     ui.label(text);
                 }

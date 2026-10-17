@@ -6,6 +6,7 @@
 mod detail;
 mod diff;
 mod extract;
+pub mod mesh;
 mod preview;
 mod sections;
 mod table;
