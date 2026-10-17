@@ -35,15 +35,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # gui_budget is ae3-gui's size budget in MiB. It differs by platform:
+        # macOS draws through system frameworks, while Windows and Linux link
+        # their own accessibility, windowing and clipboard stacks (Linux:
+        # AT-SPI over zbus, X11, Wayland and client-side decorations), and
+        # x86_64 code is larger than aarch64. First CI measurements:
+        # macOS 5.9, Windows 9.6, Linux aarch64 9.6, Linux x86_64 12.8 MiB.
         include:
           - name: Windows x86_64
             os: windows-latest
+            gui_budget: 11
           - name: macOS arm64
             os: macos-latest
+            gui_budget: 8
           - name: Linux x86_64
             os: ubuntu-24.04
+            gui_budget: 14
           - name: Linux aarch64
             os: ubuntu-24.04-arm
+            gui_budget: 11
     runs-on: ${{ matrix.os }}
     steps:
       # Keep LF endings so scripts/fetch-fixtures.sh runs under Git Bash.
@@ -90,7 +100,8 @@ jobs:
       - name: Release build
         run: cargo build --workspace --exclude ae3-oracle --release --locked
 
-      # Budgets are in MiB and apply to the default-feature release binaries.
+      # Budgets are in MiB and apply to the default-feature release binaries:
+      # 5 for ae3 everywhere, and matrix.gui_budget for ae3-gui.
       - name: Binary size budget
         shell: bash
         run: |
@@ -110,7 +121,7 @@ jobs:
             fi
           }
           check ae3 5
-          check ae3-gui 8
+          check ae3-gui ${{ matrix.gui_budget }}
           exit $status
 
   # The differential oracle (ADR-0006): every fixture texture decoded by
