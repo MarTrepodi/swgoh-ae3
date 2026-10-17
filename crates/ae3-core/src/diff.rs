@@ -97,14 +97,46 @@ fn key(p: &Package) -> Key<'_> {
     (p.kind.code(), p.name.as_str())
 }
 
+/// The Packages of `manifest` that `keep` accepts, by kind and name.
+fn by_key<'m>(
+    manifest: &'m Manifest,
+    keep: &impl Fn(&Package) -> bool,
+) -> HashMap<Key<'m>, &'m Package> {
+    manifest
+        .packages
+        .iter()
+        .filter(|p| keep(p))
+        .map(|p| (key(p), p))
+        .collect()
+}
+
 impl Diff {
     /// Compares two Manifests of the same Platform.
     #[must_use]
     pub fn compute(old: &Manifest, new: &Manifest) -> Self {
-        let old_by_key: HashMap<Key<'_>, &Package> =
-            old.packages.iter().map(|p| (key(p), p)).collect();
-        let new_by_key: HashMap<Key<'_>, &Package> =
-            new.packages.iter().map(|p| (key(p), p)).collect();
+        Self::compute_where(old, new, |_| true)
+    }
+
+    /// Compares only the Packages of one Category (case-insensitive), or all
+    /// of them when `category` is `None`. Every figure, including the Engine
+    /// Rebuild ratio, describes that Category alone.
+    #[must_use]
+    pub fn compute_in_category(old: &Manifest, new: &Manifest, category: Option<&str>) -> Self {
+        match category {
+            None => Self::compute(old, new),
+            Some(category) => {
+                Self::compute_where(old, new, |p| p.category().eq_ignore_ascii_case(category))
+            }
+        }
+    }
+
+    /// Compares only the Packages `keep` accepts, as if the Manifests held
+    /// nothing else: counts, sizes and the Engine Rebuild ratio all describe
+    /// that subset. A Package is judged in each Manifest separately.
+    #[must_use]
+    pub fn compute_where(old: &Manifest, new: &Manifest, keep: impl Fn(&Package) -> bool) -> Self {
+        let old_by_key = by_key(old, &keep);
+        let new_by_key = by_key(new, &keep);
 
         let mut diff = Self {
             old_version: old.asset_version,
@@ -308,6 +340,67 @@ mod tests {
         assert_eq!(d.changed.len(), 1);
         assert_eq!(d.changed_bundles, 0);
         assert!(!d.is_engine_rebuild());
+    }
+
+    #[test]
+    fn category_diff_counts_only_that_category() {
+        // Every ability Bundle changed (an Engine Rebuild on its own), one of
+        // four charui Bundles did.
+        let old = manifest(
+            1,
+            vec![
+                pkg("ability_a", B, 1, 10),
+                pkg("ability_b", B, 1, 10),
+                pkg("ability_c", B, 1, 10),
+                pkg("charui_a", B, 1, 10),
+                pkg("charui_b", B, 1, 10),
+                pkg("charui_c", B, 1, 10),
+                pkg("charui_d", B, 1, 10),
+                pkg("charui_gone", B, 1, 5),
+            ],
+        );
+        let new = manifest(
+            2,
+            vec![
+                pkg("ability_a", B, 2, 10),
+                pkg("ability_b", B, 2, 10),
+                pkg("ability_c", B, 2, 10),
+                pkg("charui_a", B, 2, 20),
+                pkg("charui_b", B, 1, 10),
+                pkg("charui_c", B, 1, 10),
+                pkg("charui_d", B, 1, 10),
+                pkg("charui_new", B, 1, 7),
+                pkg("ability_new", B, 1, 100),
+            ],
+        );
+        let whole = Diff::compute(&old, &new);
+        assert_eq!((whole.shared_bundles, whole.changed_bundles), (7, 4));
+
+        let d = Diff::compute_in_category(&old, &new, Some("CharUI"));
+        let names = |f| d.packages(f).map(|p| p.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names(DiffFilter::Added), ["charui_new"]);
+        assert_eq!(names(DiffFilter::Changed), ["charui_a"]);
+        assert_eq!(names(DiffFilter::Removed), ["charui_gone"]);
+        assert_eq!((d.shared, d.shared_bundles, d.changed_bundles), (4, 4, 1));
+        assert_eq!(
+            (d.added_size(), d.changed_size(), d.removed_size()),
+            (7, 20, 5)
+        );
+        assert!((d.changed_ratio() - 0.25).abs() < f64::EPSILON);
+        assert!(!d.is_engine_rebuild());
+
+        let ability = Diff::compute_in_category(&old, &new, Some("ability"));
+        assert_eq!((ability.shared_bundles, ability.changed_bundles), (3, 3));
+        assert!(ability.is_engine_rebuild());
+        assert_eq!(ability.added_size(), 100);
+
+        assert_eq!(Diff::compute_in_category(&old, &new, None), whole);
+        let none = Diff::compute_in_category(&old, &new, Some("nope"));
+        assert!(none.is_empty() && !none.is_engine_rebuild());
+        assert_eq!(
+            (none.old_version, none.new_version),
+            (AssetVersion(1), AssetVersion(2))
+        );
     }
 
     #[test]

@@ -120,6 +120,8 @@ ae3 cache prune --max 2GB
 
 `ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. `--names-only` matches bundle names without the index, and `--no-update` searches the index as it stands. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting` and `--no-padding-restoration`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
 
+`ae3 diff --category <name>` compares only that category's packages: the counts, sizes, changed share and engine-rebuild flag all describe that category, in text and `--json` output alike.
+
 Exit codes: `0` success, `1` error, `2` invalid arguments or settings, `3` partial failure: some packages or assets in a batch failed, or the batch was cancelled.
 
 `ae3 serve` (listening on `127.0.0.1:8080` unless `--bind` says otherwise) answers swgoh-ae2's routes: `/Asset/list`, `/Asset/listDiff` and `/Asset/single`, with the same parameters (`assetOS` 0 = Windows, 1 = Android, 2 = iOS). Errors come back as JSON with a matching HTTP status.

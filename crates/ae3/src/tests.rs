@@ -451,6 +451,41 @@ fn diff_lists_and_extracts() {
     assert!(text.stdout.contains("- charui_gone"), "{}", text.stdout);
     let summary = h.run(&format!("ae3 diff {old} --summary")).stdout;
     assert!(!summary.contains("charui_bossk"), "{summary}");
+    assert!(!summary.contains("Engine Rebuild"), "{summary}");
+
+    // --category scopes every figure, the Engine Rebuild flag included: the
+    // one vanity Bundle changed, so that Category alone is a rebuild.
+    let vanity = h
+        .run(&format!("ae3 diff {old} --category vanity --json"))
+        .json();
+    assert_eq!(vanity["category"], "vanity");
+    assert_eq!(vanity["shared"], 1);
+    assert_eq!(vanity["shared_bundles"], 1);
+    assert_eq!(vanity["changed_bundles"], 1);
+    assert_eq!(vanity["changed_ratio"], 1.0);
+    assert_eq!(vanity["engine_rebuild"], true);
+    assert_eq!(vanity["sizes"]["added"], 0);
+    assert_eq!(vanity["sizes"]["removed"], 0);
+    assert_eq!(vanity["sizes"]["changed"], vanity["changed"][0]["size"]);
+    let text = h
+        .run(&format!("ae3 diff {old} --category vanity --summary"))
+        .stdout;
+    assert!(text.contains("Category vanity"), "{text}");
+    assert!(
+        text.contains("1 of 1 vanity Bundles in both changed (100.0%): Engine Rebuild"),
+        "{text}"
+    );
+    let charui = h
+        .run(&format!("ae3 diff {old} --category charui --json"))
+        .json();
+    assert_eq!(charui["shared"], 0);
+    assert_eq!(charui["changed_ratio"], 0.0);
+    assert_eq!(charui["engine_rebuild"], false);
+    assert_eq!(charui["sizes"]["removed"], 5, "charui_gone");
+    assert_eq!(
+        charui["sizes"]["added"], charui["added"][0]["size"],
+        "charui_bossk only"
+    );
 
     let ran = h.run(&format!(
         "ae3 diff {old} --extract added --category charui --json"

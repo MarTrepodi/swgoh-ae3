@@ -86,16 +86,6 @@ struct DiffOutput<'a> {
     extract: Option<ExportOutput<'a>>,
 }
 
-/// Keeps only the Packages of `category`, if one is given. The Engine
-/// Rebuild figures stay those of the whole Diff.
-pub fn filter_category(diff: &mut Diff, category: Option<&str>) {
-    let Some(category) = category else { return };
-    let keep = |p: &Package| p.category().eq_ignore_ascii_case(category);
-    diff.added.retain(keep);
-    diff.removed.retain(keep);
-    diff.changed.retain(|c| keep(&c.new));
-}
-
 pub fn run<T: Transport + Send + Sync + 'static>(
     app: &App<T>,
     args: &DiffArgs,
@@ -114,15 +104,18 @@ pub fn run<T: Transport + Send + Sync + 'static>(
     };
     let new_store = app.open_store(new_location)?;
     let old_store = app.open_store(old_location)?;
-    let mut diff = Diff::compute(old_store.manifest(), new_store.manifest());
+    // With --category every figure, the Engine Rebuild flag included,
+    // describes that Category alone.
+    let category = args.category.as_deref();
+    let diff = Diff::compute_in_category(old_store.manifest(), new_store.manifest(), category);
     drop(old_store);
-    filter_category(&mut diff, args.category.as_deref());
 
     let engine_rebuild = diff.is_engine_rebuild();
     if engine_rebuild {
         app.ui.info(&format!(
-            "Engine Rebuild: {:.0}% of the Bundles in both Asset Versions changed",
-            diff.changed_ratio() * 100.0
+            "Engine Rebuild: {:.0}% of the {}Bundles in both Asset Versions changed",
+            diff.changed_ratio() * 100.0,
+            category_label(category)
         ));
     }
 
@@ -180,7 +173,7 @@ pub fn run<T: Transport + Send + Sync + 'static>(
             },
         )?;
     } else {
-        write_text(out, app, &diff, args.summary)?;
+        write_text(out, app, &diff, category, args.summary)?;
         if let Some((report, packages)) = &export {
             writeln!(out)?;
             extract::write_summary(out, report, *packages, output_dir)?;
@@ -193,12 +186,16 @@ fn write_text<T>(
     out: &mut dyn Write,
     app: &App<T>,
     diff: &Diff,
+    category: Option<&str>,
     summary: bool,
 ) -> Result<(), CliError> {
     writeln!(
         out,
-        "Diff {} -> {} ({})",
-        diff.old_version, diff.new_version, app.config.platform
+        "Diff {} -> {} ({}{})",
+        diff.old_version,
+        diff.new_version,
+        app.config.platform,
+        category.map_or_else(String::new, |c| format!(", Category {c}"))
     )?;
     writeln!(
         out,
@@ -215,9 +212,10 @@ fn write_text<T>(
     writeln!(out, "  removed  {:>6} Packages", diff.removed.len())?;
     writeln!(
         out,
-        "  {} of {} Bundles in both changed ({:.1}%){}",
+        "  {} of {} {}Bundles in both changed ({:.1}%){}",
         diff.changed_bundles,
         diff.shared_bundles,
+        category_label(category),
         diff.changed_ratio() * 100.0,
         if diff.is_engine_rebuild() {
             ": Engine Rebuild"
@@ -265,48 +263,18 @@ fn write_text<T>(
     Ok(())
 }
 
+/// `"{category} "` for a Category Diff, so counts read "4 charui Bundles".
+fn category_label(category: Option<&str>) -> String {
+    category.map_or_else(String::new, |c| format!("{c} "))
+}
+
 #[cfg(test)]
 mod tests {
-    use ae3_core::{AssetVersion, Manifest, PackageKind};
-
     use super::*;
 
-    fn package(name: &str, hash: u64) -> Package {
-        Package {
-            name: name.into(),
-            content_hash: hash,
-            size: 10,
-            kind: PackageKind::Bundle,
-            ..Package::default()
-        }
-    }
-
     #[test]
-    fn category_filter_keeps_rebuild_figures() {
-        let old = Manifest {
-            asset_version: AssetVersion(1),
-            packages: vec![
-                package("charui_a", 1),
-                package("ability_b", 1),
-                package("charui_gone", 1),
-            ],
-            ..Manifest::default()
-        };
-        let new = Manifest {
-            asset_version: AssetVersion(2),
-            packages: vec![
-                package("charui_a", 2),
-                package("ability_b", 2),
-                package("charui_new", 1),
-            ],
-            ..Manifest::default()
-        };
-        let mut diff = Diff::compute(&old, &new);
-        filter_category(&mut diff, Some("CharUI"));
-        assert_eq!(diff.changed.len(), 1);
-        assert_eq!(diff.added[0].name, "charui_new");
-        assert_eq!(diff.removed[0].name, "charui_gone");
-        assert_eq!(diff.changed_bundles, 2);
-        assert!(diff.is_engine_rebuild());
+    fn category_labels() {
+        assert_eq!(category_label(None), "");
+        assert_eq!(category_label(Some("charui")), "charui ");
     }
 }
