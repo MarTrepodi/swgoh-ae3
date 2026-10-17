@@ -24,7 +24,10 @@ mod value;
 pub use bundle::{BlockInfo, Bundle, BundleHeader, Node};
 pub use decompress::Compression;
 pub use error::{Error, Result};
-pub use probe::{Probe, ProbeListing, ProbedAsset, SUGGESTED_FIRST_PROBE_LEN, probe_prefix};
+pub use probe::{
+    Probe, ProbeListing, ProbedAsset, SUGGESTED_FIRST_PROBE_LEN, probe_prefix,
+    probe_prefix_filtered,
+};
 pub use rabex::typetree::TypeTreeNode;
 pub use serialized::{
     AssetBundleInfo, CLASS_ASSET_BUNDLE, CLASS_MONO_BEHAVIOUR, CLASS_MONO_SCRIPT, ContainerEntry,
