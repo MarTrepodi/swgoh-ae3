@@ -18,6 +18,7 @@ use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
 use crate::model::mesh::OrbitCamera;
+use crate::model::names::NamesState;
 use crate::model::playback::{Action, Playback, SoundRef, unplayable_sound};
 use crate::model::release::ReleaseState;
 use crate::model::startup::LatestDecision;
@@ -185,13 +186,41 @@ impl Ae3App {
     }
 
     /// Starts what the window does by itself: loading the latest Manifest
-    /// and, unless turned off, looking for a newer AE3 release. Kept out of
-    /// [`Ae3App::new`] so tests build an app that stays offline.
+    /// and the Name Index and, unless turned off, looking for a newer AE3
+    /// release. Kept out of [`Ae3App::new`] so tests build an app that stays
+    /// offline.
     pub fn start(&mut self) {
         self.start_up();
+        self.start_names();
         if self.config.check_for_updates {
             self.start_release_check();
         }
+    }
+
+    // ---- Name Index -----------------------------------------------------
+
+    /// Loads the display names search matches on a thread of its own:
+    /// the cached Name Index at once, then one brought up to date with the
+    /// gamedata mirror. Search works on Bundle and Asset names meanwhile.
+    fn start_names(&mut self) {
+        self.model.names_state = NamesState::Loading {
+            step: "Loading display names…".to_owned(),
+        };
+        let services = Arc::clone(&self.services);
+        let language = self.config.language;
+        let outbox = self.outbox.clone();
+        spawn_long("ae3-names", move || match services.cache() {
+            Ok(cache) => tasks::load_names(
+                cache.downloader().transport(),
+                cache.root(),
+                language,
+                &outbox,
+            ),
+            Err(e) => outbox.send(Msg::NamesLoaded {
+                index: None,
+                state: NamesState::Unavailable { problem: e },
+            }),
+        });
     }
 
     // ---- AE3 release notice --------------------------------------------
@@ -494,6 +523,14 @@ impl Ae3App {
             let matches = SearchMatches::search(&index, &query);
             outbox.send(Msg::SearchDone { matches });
         });
+    }
+
+    fn search_done(&mut self, matches: SearchMatches) {
+        self.search_in_flight = false;
+        self.model.apply_search(matches);
+        if self.search_wanted {
+            self.request_search();
+        }
     }
 
     // ---- Preview --------------------------------------------------------
@@ -921,13 +958,7 @@ impl Ae3App {
                 paused,
             } => self.index_progress(generation, view, paused, now),
             Msg::IndexDone { generation, result } => self.index_done(generation, result),
-            Msg::SearchDone { matches } => {
-                self.search_in_flight = false;
-                self.model.apply_search(matches);
-                if self.search_wanted {
-                    self.request_search();
-                }
-            }
+            Msg::SearchDone { matches } => self.search_done(matches),
             Msg::PreviewStatus { generation, text } => {
                 if self.preview_generation.load(Ordering::Relaxed) == generation {
                     self.preview_status = Some(text);
@@ -987,6 +1018,8 @@ impl Ae3App {
                 }
             }
             Msg::ReleaseChecked(state) => self.model.release = Some(state),
+            Msg::NamesProgress(step) => self.model.names_state.progress(step),
+            Msg::NamesLoaded { index, state } => self.model.set_names(index, state),
             Msg::ConfigSaved(result) => {
                 if let Err(e) = result {
                     self.model.notice = Some(format!("Could not save settings: {e}"));
@@ -1806,6 +1839,83 @@ mod tests {
         // The Diff tab renders without a Diff.
         app.model.tab = crate::model::Tab::Diff;
         frame(&ctx, &mut app);
+    }
+
+    /// The Name Index arriving in the background: progress shows while
+    /// nothing is loaded, the matching Game Entities list under the search
+    /// box (collapsed, then all of them), and picking one narrows the table.
+    #[test]
+    fn game_entities_render_and_narrow_the_table() {
+        use ae3_core::{EntityKind, GameEntity, GamedataVersions, Language, NameIndex};
+
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let package = |name: &str| ae3_core::Package {
+            name: name.into(),
+            size: 10,
+            ..ae3_core::Package::default()
+        };
+        app.model.set_manifest(
+            Arc::new(Manifest {
+                asset_version: AssetVersion(100_054),
+                packages: vec![package("charui_bossk"), package("vanity_bossk")],
+                ..Manifest::default()
+            }),
+            Instant::now(),
+        );
+        app.handle(&ctx, Msg::NamesProgress("Downloading units.json…".into()));
+        assert_eq!(
+            app.model.names_state.line(),
+            Some(("Downloading units.json…".to_owned(), false))
+        );
+        frame(&ctx, &mut app);
+
+        // More matches than are listed at first, one with no Bundle here.
+        let mut entities: Vec<GameEntity> = (0..12)
+            .map(|i| GameEntity {
+                kind: EntityKind::Gear,
+                id: format!("gear{i}"),
+                name: format!("Bossk Gear {i}"),
+                context: None,
+                bundles: vec!["missing".into()],
+            })
+            .collect();
+        entities.insert(
+            0,
+            GameEntity {
+                kind: EntityKind::PlayerPortrait,
+                id: "PLAYERPORTRAIT_BOSSK".into(),
+                name: "Bossk".into(),
+                context: None,
+                bundles: vec!["vanity_bossk".into()],
+            },
+        );
+        let index = NameIndex::new(Language::default(), GamedataVersions::default(), entities);
+        let state = NamesState::new(Some(&index), ae3_core::NameIndexStatus::Built, None, false);
+        app.handle(
+            &ctx,
+            Msg::NamesLoaded {
+                index: Some(Arc::new(index)),
+                state,
+            },
+        );
+        // A later progress report does not hide the index in use.
+        app.handle(&ctx, Msg::NamesProgress("late".into()));
+        assert!(matches!(app.model.names_state, NamesState::Ready { .. }));
+
+        app.set_query("bossk".into());
+        frame(&ctx, &mut app);
+        assert_eq!(app.model.search.as_ref().unwrap().entities.len(), 13);
+        app.model.entities_expanded = true;
+        frame(&ctx, &mut app);
+        let key = app.model.search.as_ref().unwrap().entities[0].key();
+        app.model.pick_entity(Some(key));
+        frame(&ctx, &mut app);
+        assert_eq!(app.model.visible, [1]);
+        assert_eq!(
+            app.model.search_status().unwrap(),
+            "Showing the Bundle of Player Portrait 'Bossk'"
+        );
     }
 
     /// The Output section's Structured Asset choice reaches the export

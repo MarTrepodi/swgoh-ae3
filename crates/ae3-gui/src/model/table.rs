@@ -1,5 +1,6 @@
 //! The Bundles table: one row per Package, filtered by the Asset Index
-//! search and the type filter, and sorted.
+//! search (or the Game Entity picked from it) and the type filter, and
+//! sorted.
 
 use std::fmt::Write as _;
 
@@ -7,6 +8,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use ae3_core::{AssetIndex, AssetKind, AssetKinds, Manifest, PackageKind};
+
+use super::names::{EntityKey, EntityMatch};
 
 /// The Asset kinds the type filter and the Types column show. `Other`
 /// (scene plumbing) is never shown.
@@ -107,6 +110,10 @@ impl TypeFilter {
 pub struct SearchMatches {
     /// The query as typed.
     pub query: String,
+    /// Game Entities whose display names matched, best first; empty
+    /// without a Name Index. The model fills them in, from the Name Index
+    /// and the Manifest, so they never wait for the Asset Index.
+    pub entities: Vec<EntityMatch>,
     /// Package name -> the path ids of its Assets whose names matched
     /// (empty when only the Package name matched).
     pub packages: HashMap<String, Vec<i64>>,
@@ -117,7 +124,8 @@ pub struct SearchMatches {
 }
 
 impl SearchMatches {
-    /// Runs `query` against `index`.
+    /// Runs `query` against `index`. The caller adds the Game Entities
+    /// (see [`Model::set_query`](super::Model::set_query)).
     #[must_use]
     pub fn search(index: &AssetIndex, query: &str) -> Self {
         let results = index.search(query);
@@ -134,13 +142,15 @@ impl SearchMatches {
             .collect();
         Self {
             query: query.to_owned(),
+            entities: Vec::new(),
             packages,
             asset_matches,
             pending_bundles: results.coverage.pending_bundles(),
         }
     }
 
-    /// Matches from Package names alone, for when no index is loaded yet.
+    /// Matches from Package names alone, for when no index is loaded yet;
+    /// the caller adds the Game Entities.
     #[must_use]
     pub fn by_name(rows: &[PackageRow], query: &str) -> Self {
         let needle = query.trim().to_lowercase();
@@ -154,6 +164,7 @@ impl SearchMatches {
         };
         Self {
             query: query.to_owned(),
+            entities: Vec::new(),
             packages,
             asset_matches: 0,
             pending_bundles: rows
@@ -174,16 +185,39 @@ impl SearchMatches {
         self.packages.get(name).map_or(&[], Vec::as_slice)
     }
 
-    /// "N Bundles contain 'x'".
+    /// The matched Game Entity `key`, if it is among the matches.
     #[must_use]
-    pub fn status_line(&self) -> String {
+    pub fn entity(&self, key: &EntityKey) -> Option<&EntityMatch> {
+        self.entities.iter().find(|e| e.is(key))
+    }
+
+    /// "2 Game Entities · N Bundles contain 'x' (M matching Assets)", or,
+    /// with the Game Entity `picked` narrowing the table, "Showing the N
+    /// Bundles of Unit 'Bossk'".
+    #[must_use]
+    pub fn status_line(&self, picked: Option<&EntityMatch>) -> String {
+        if let Some(entity) = picked {
+            return match entity.bundles.len() {
+                0 => format!("{} links to no Bundle of this Manifest", entity.title()),
+                1 => format!("Showing the Bundle of {}", entity.title()),
+                n => format!("Showing the {n} Bundles of {}", entity.title()),
+            };
+        }
+        let mut line = String::new();
+        match self.entities.len() {
+            0 => {}
+            1 => line.push_str("1 Game Entity · "),
+            n => {
+                let _ = write!(line, "{n} Game Entities · ");
+            }
+        }
         let n = self.packages.len();
         let noun = if n == 1 {
             "Bundle contains"
         } else {
             "Bundles contain"
         };
-        let mut line = format!("{n} {noun} '{}'", self.query.trim());
+        let _ = write!(line, "{n} {noun} '{}'", self.query.trim());
         if self.asset_matches > 0 {
             let s = if self.asset_matches == 1 { "" } else { "s" };
             let _ = write!(line, " ({} matching Asset{s})", self.asset_matches);
@@ -244,18 +278,26 @@ impl Sort {
     }
 }
 
-/// The ids of the rows to show, in display order.
+/// The ids of the rows to show, in display order. With a search, only its
+/// matches are shown, or, when `picked` names one of its Game Entities,
+/// only that entity's Bundles.
 #[must_use]
 pub fn visible_rows(
     rows: &[PackageRow],
     filter: TypeFilter,
     search: Option<&SearchMatches>,
+    picked: Option<&EntityKey>,
     sort: Sort,
 ) -> Vec<usize> {
+    let entity = search.zip(picked).and_then(|(s, key)| s.entity(key));
     let mut shown: Vec<&PackageRow> = rows
         .iter()
         .filter(|r| filter.accepts(r))
-        .filter(|r| search.is_none_or(|s| s.contains(&r.name)))
+        .filter(|r| match (entity, search) {
+            (Some(entity), _) => entity.bundles.contains(&r.name),
+            (None, Some(search)) => search.contains(&r.name),
+            (None, None) => true,
+        })
         .collect();
     shown.sort_by(|a, b| sort.compare(a, b));
     shown.into_iter().map(|r| r.id).collect()
@@ -318,7 +360,7 @@ mod tests {
 
     #[test]
     fn no_filter_shows_everything_sorted_by_name() {
-        let visible = visible_rows(&rows(), TypeFilter::default(), None, Sort::default());
+        let visible = visible_rows(&rows(), TypeFilter::default(), None, None, Sort::default());
         assert_eq!(visible, [2, 0, 3, 1]);
     }
 
@@ -328,7 +370,7 @@ mod tests {
         filter.toggle(AssetKind::Atlas);
         filter.toggle(AssetKind::Mesh);
         assert!(filter.is_active());
-        let visible = visible_rows(&rows(), filter, None, Sort::default());
+        let visible = visible_rows(&rows(), filter, None, None, Sort::default());
         assert_eq!(visible, [2, 1]);
         filter.toggle(AssetKind::Atlas);
         filter.toggle(AssetKind::Mesh);
@@ -342,17 +384,67 @@ mod tests {
         let mut sort = Sort::default();
         sort.click(SortKey::Size);
         assert_eq!(
-            visible_rows(&rows, TypeFilter::default(), Some(&search), sort),
+            visible_rows(&rows, TypeFilter::default(), Some(&search), None, sort),
             [0, 2]
         );
         sort.click(SortKey::Size);
         assert!(sort.descending);
         assert_eq!(
-            visible_rows(&rows, TypeFilter::default(), Some(&search), sort),
+            visible_rows(&rows, TypeFilter::default(), Some(&search), None, sort),
             [2, 0]
         );
         sort.click(SortKey::Name);
         assert!(!sort.descending);
+    }
+
+    fn bossk() -> EntityMatch {
+        EntityMatch {
+            kind: ae3_core::EntityKind::Unit,
+            id: "BOSSK".into(),
+            name: "Bossk".into(),
+            context: None,
+            bundles: vec!["char_bossk_pre".into(), "unit_details_atlas".into()],
+        }
+    }
+
+    /// A picked Game Entity shows its own Bundles, even ones whose names do
+    /// not match the query, and the type filter still applies.
+    #[test]
+    fn picked_entity_shows_its_bundles() {
+        let rows = rows();
+        let mut search = SearchMatches::by_name(&rows, "bossk");
+        search.entities.push(bossk());
+        let key = bossk().key();
+        let picked =
+            |filter| visible_rows(&rows, filter, Some(&search), Some(&key), Sort::default());
+        assert_eq!(picked(TypeFilter::default()), [2, 1]);
+        let mut filter = TypeFilter::default();
+        filter.toggle(AssetKind::Mesh);
+        assert_eq!(picked(filter), [2]);
+        // A key the matches lack falls back to the query's matches.
+        let other = EntityKey {
+            kind: ae3_core::EntityKind::Gear,
+            id: "nope".into(),
+        };
+        assert_eq!(
+            visible_rows(
+                &rows,
+                TypeFilter::default(),
+                Some(&search),
+                Some(&other),
+                Sort::default()
+            ),
+            [2, 0]
+        );
+        assert_eq!(
+            search.status_line(Some(&bossk())),
+            "Showing the 2 Bundles of Unit 'Bossk'"
+        );
+        assert!(
+            search
+                .status_line(None)
+                .starts_with("1 Game Entity · 2 Bundles contain 'bossk'")
+        );
     }
 
     #[test]
@@ -362,7 +454,7 @@ mod tests {
         assert_eq!(search.packages.len(), 2);
         assert!(
             search
-                .status_line()
+                .status_line(None)
                 .starts_with("2 Bundles contain 'bossk'")
         );
         let none = SearchMatches::by_name(&rows, "   ");

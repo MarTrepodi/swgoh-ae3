@@ -11,7 +11,7 @@ mod preview;
 mod sections;
 mod table;
 
-use ae3_core::AssetKind;
+use ae3_core::{AssetKind, EntityKind};
 use eframe::egui::{self, Color32, RichText};
 
 use crate::app::Ae3App;
@@ -32,6 +32,19 @@ pub fn glyph(kind: AssetKind) -> &'static str {
         AssetKind::Mesh => "▲",
         AssetKind::Audio => "♪",
         AssetKind::Other => "○",
+    }
+}
+
+/// A small glyph for each kind of Game Entity, from the same fonts as
+/// [`glyph`].
+#[must_use]
+pub fn entity_glyph(kind: EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Unit => "◉",
+        EntityKind::Ability => "❖",
+        EntityKind::Gear => "⊛",
+        EntityKind::Material => "◊",
+        EntityKind::PlayerPortrait => "◙",
     }
 }
 
@@ -195,6 +208,11 @@ mod tests {
         output.textures_delta.clear();
         for kind in AssetKind::ALL {
             let g = glyph(kind);
+            let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), g));
+            assert!(ok, "no glyph for {kind}: {g}");
+        }
+        for kind in EntityKind::ALL {
+            let g = entity_glyph(kind);
             let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), g));
             assert!(ok, "no glyph for {kind}: {g}");
         }
