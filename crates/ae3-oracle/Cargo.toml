@@ -1,0 +1,27 @@
+[package]
+name = "ae3-oracle"
+description = "Development-only differential oracle and fixture tooling for AE3; never shipped"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# Decode every texture with unity-rs-core as well (ADR-0006). It links C zstd,
+# so it stays off by default: `cargo test --workspace` never compiles it, no
+# shipped binary depends on this crate, and CI runs it in a job of its own.
+oracle = ["dep:unity-rs-core"]
+
+[dependencies]
+ae3-core.workspace = true
+unity-rs-core = { version = "=0.6.1", optional = true }
+
+[lints]
+workspace = true
+
+# Never part of a release archive.
+[package.metadata.dist]
+dist = false
