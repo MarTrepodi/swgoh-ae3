@@ -1,0 +1,23 @@
+[package]
+name = "ae3-unity"
+description = "Unity container and object layer for AE3: UnityFS Bundles, SerializedFiles and TypeTree-driven Asset reading"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# SerializedFile metadata and TypeTree parsing (ADR-0006). No default features:
+# AE3 decompresses Bundles itself and SWGOH ships TypeTrees, so neither the
+# lzma-rs/lz4 backends nor the embedded TPK are needed.
+rabex = { version = "0.2.1", default-features = false }
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-decode", "checked-decode"] }
+lzma-rust2 = { version = "0.22", default-features = false, features = ["std", "optimization"] }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
