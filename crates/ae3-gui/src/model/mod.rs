@@ -11,6 +11,7 @@ pub mod extract;
 pub mod jobs;
 pub mod lru;
 pub mod mesh;
+pub mod playback;
 pub mod preview;
 pub mod release;
 pub mod selection;

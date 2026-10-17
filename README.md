@@ -17,7 +17,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
   - sprite atlases, with each sprite outlined
   - structured data as a browsable tree
   - text, with syntax highlighting
-  - audio packages as a list of sounds with codec, channels, sample rate and duration (playback is planned)
+  - audio packages as a list of sounds with codec, channels, sample rate and duration, each with a play button (Wwise Vorbis, PCM and PTADPCM sounds; other codecs show "can't play")
   - 3D meshes, shaded, with an orbiting camera: drag to rotate, right-drag to pan, scroll to zoom
 - **Sprite separation.** Cuts sprite atlases into individual named images, with metadata about each sprite. Many bundles carry a copy of an atlas whose texture lives in one shared bundle; those sprites are cut once, into the shared bundle's folder, and each copy's metadata points there.
 - **Version diffs.** Compares two asset versions and reports added, changed and removed bundles and audio packages, with download sizes. It flags releases where the game moved to a new engine version, and can extract only what changed.
@@ -45,7 +45,7 @@ Pre-built binaries are published on the [Releases](https://github.com/swgoh-util
 | Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
 | Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
 
-Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). Each archive has a `.sha256` checksum file next to it on the release page. The binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).
+Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
 
 To add the GUI to a Linux desktop's application menu, run this from the extracted folder:
 
@@ -187,7 +187,7 @@ With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whe
 
 ## Building from source
 
-You need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it automatically).
+You need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it automatically). On Linux the GUI's sound playback also needs the ALSA headers: `libasound2-dev` on Debian and Ubuntu, `alsa-lib-devel` on Fedora.
 
 ```bash
 cargo build --release

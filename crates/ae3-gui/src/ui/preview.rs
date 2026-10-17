@@ -9,6 +9,7 @@ use egui_extras::{Column, TableBuilder};
 
 use super::{error_label, glyph, kind_label, match_color, text_size};
 use crate::app::Ae3App;
+use crate::model::playback::{PlayState, SoundRef};
 use crate::model::preview::{PreviewStatus, has_image, summary};
 use crate::model::table::format_bytes;
 
@@ -289,12 +290,9 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         return;
     }
     let sounds = sounds.clone();
+    let playback = &app.playback;
     let mut toggled: Option<u64> = None;
-    ui.label(
-        RichText::new("Playback is not available yet; extract sounds to listen.")
-            .weak()
-            .small(),
-    );
+    let mut pressed: Option<SoundRef> = None;
     TableBuilder::new(ui)
         .id_salt("sounds")
         .striped(true)
@@ -304,6 +302,7 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         // to fit, the remainder column takes the new space, and the pane
         // creeps across the window a little every frame.
         .column(Column::exact(22.0))
+        .column(Column::exact(PLAY_W).clip(true))
         .column(Column::remainder().at_least(100.0).clip(true))
         .column(Column::initial(64.0).clip(true))
         .column(Column::initial(150.0).clip(true))
@@ -311,6 +310,7 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         .column(Column::initial(72.0).clip(true))
         .auto_shrink(false)
         .header(18.0, |mut h| {
+            h.col(|_| {});
             h.col(|_| {});
             h.col(|ui| {
                 ui.strong("Sound");
@@ -335,6 +335,12 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
                 row.col(|ui| {
                     if ui.checkbox(&mut checked, "").changed() {
                         toggled = Some(s.id);
+                    }
+                });
+                row.col(|ui| {
+                    let sound = SoundRef::Sound(s.index);
+                    if play_control(ui, playback.state(sound)) {
+                        pressed = Some(sound);
                     }
                 });
                 row.col(|ui| {
@@ -364,6 +370,37 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         });
     if let Some(id) = toggled {
         preview.toggle_sound(id);
+    }
+    if let Some(sound) = pressed {
+        app.toggle_sound(sound);
+    }
+}
+
+/// Width of the play control: room for "can't play".
+pub const PLAY_W: f32 = 84.0;
+
+/// A sound's play control: Play, Stop, a spinner while it decodes, or
+/// "can't play" with the reason on hover. Returns true when pressed.
+pub fn play_control(ui: &mut egui::Ui, state: PlayState<'_>) -> bool {
+    match state {
+        PlayState::Idle => ui
+            .small_button("▶ Play")
+            .on_hover_text("Play this sound")
+            .clicked(),
+        PlayState::Playing => ui
+            .small_button("■ Stop")
+            .on_hover_text("Stop playing")
+            .clicked(),
+        PlayState::Decoding => {
+            ui.spinner();
+            // A press while decoding cancels it.
+            ui.small_button("■").on_hover_text("Stop").clicked()
+        }
+        PlayState::Unplayable(why) => {
+            ui.label(RichText::new("can't play").weak())
+                .on_hover_text(why);
+            false
+        }
     }
 }
 

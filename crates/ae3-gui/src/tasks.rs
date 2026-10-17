@@ -10,13 +10,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
+use ae3_core::ae3_audio::{self, Pcm};
 use ae3_core::ae3_image::{self, RgbaImage};
 use ae3_core::http::{Transport, UreqTransport};
 use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
-    Environment, ExportOptions, IndexBuilder, IndexProgress, LoadedBundle, PackageCache,
-    PackageKind, PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
+    Environment, ExportOptions, IndexBuilder, IndexProgress, LoadedAudioPackage, LoadedBundle,
+    PackageCache, PackageKind, PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
 };
 use eframe::egui::ColorImage;
 
@@ -24,6 +25,7 @@ use crate::model::IndexProgressView;
 use crate::model::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use crate::model::jobs::{Generation, Throttle};
 use crate::model::mesh::MeshPreview;
+use crate::model::playback::{SoundRef, unplayable_clip};
 use crate::model::preview::THUMBNAIL_PX;
 use crate::model::release::{self, ReleaseState};
 use crate::model::table::SearchMatches;
@@ -78,6 +80,8 @@ pub enum Opened {
         kinds: AssetKinds,
     },
     Audio {
+        /// Kept for playback, which decodes from it.
+        package: Arc<LoadedAudioPackage>,
         sounds: Vec<SoundInfo>,
     },
 }
@@ -102,6 +106,12 @@ pub enum DetailContent {
     },
     /// A Mesh, ready to upload for the 3D view.
     Mesh(Arc<MeshPreview>),
+    /// An AudioClip: a description, and why it cannot be played (`None`
+    /// when it can be tried).
+    Audio {
+        text: String,
+        unplayable: Option<String>,
+    },
     /// Nothing to show beyond a description.
     Info(String),
 }
@@ -204,6 +214,16 @@ pub enum Msg {
     DetailMasked {
         generation: Generation,
         color: ColorImage,
+    },
+    /// A sound to play was decoded (playback generation).
+    SoundDecoded {
+        generation: Generation,
+        result: Result<Pcm, String>,
+    },
+    /// The sound of a playback generation finished, or could not play.
+    PlaybackEnded {
+        generation: Generation,
+        error: Option<String>,
     },
     ExtractProgress {
         generation: Generation,
@@ -443,6 +463,7 @@ pub fn open_package(
             .open_audio_package(name)
             .map(|package| Opened::Audio {
                 sounds: package.sound_infos(),
+                package: Arc::new(package),
             })
             .map_err(|e| e.to_string()),
         PackageKind::Other(code) => Err(format!("{name} is a Package of unknown kind {code}")),
@@ -549,11 +570,14 @@ pub fn detail(
         }
         AssetKind::Audio => {
             let clip = view.audio_clip(id).map_err(err)?;
-            DetailContent::Info(format!(
-                "AudioClip, {} of {} data. Playback is not available yet; extract it to listen.",
-                crate::model::table::format_bytes(clip.bytes.len() as u64),
-                clip.extension
-            ))
+            DetailContent::Audio {
+                text: format!(
+                    "AudioClip, {} of {} data.",
+                    crate::model::table::format_bytes(clip.bytes.len() as u64),
+                    clip.extension
+                ),
+                unplayable: unplayable_clip(clip.extension),
+            }
         }
         AssetKind::Mesh => {
             DetailContent::Mesh(Arc::new(MeshPreview::new(&view.mesh(id).map_err(err)?)))
@@ -570,6 +594,55 @@ pub fn detail(
             }
         }
     })
+}
+
+/// What a sound to play is decoded from: the preview's Package, shared.
+#[derive(Clone)]
+pub enum SoundFrom {
+    Package(Arc<LoadedAudioPackage>),
+    Bundle(Arc<LoadedBundle>),
+}
+
+impl Opened {
+    /// The Package to decode the preview's sounds from.
+    #[must_use]
+    pub fn sound_source(&self) -> SoundFrom {
+        match self {
+            Self::Audio { package, .. } => SoundFrom::Package(Arc::clone(package)),
+            Self::Bundle { bundle, .. } => SoundFrom::Bundle(Arc::clone(bundle)),
+        }
+    }
+}
+
+/// Decodes a sound of the preview to samples for playback: an Audio
+/// Package's sound through `ae3-audio`, or a Bundle's WAV AudioClip. A
+/// panic in a decoder is reported as an error.
+pub fn decode_sound(from: &SoundFrom, sound: SoundRef) -> Result<Pcm, String> {
+    let decode = || match (from, sound) {
+        (SoundFrom::Package(package), SoundRef::Sound(index)) => {
+            let sound = package
+                .sounds()
+                .get(index)
+                .ok_or_else(|| format!("no sound {index} in {}", package.name()))?;
+            package
+                .package()
+                .decode_pcm(sound)
+                .map_err(|e| e.to_string())
+        }
+        (SoundFrom::Bundle(bundle), SoundRef::Clip(path_id)) => {
+            let clip = bundle
+                .view()
+                .and_then(|view| view.audio_clip(path_id))
+                .map_err(|e| e.to_string())?;
+            if let Some(why) = unplayable_clip(clip.extension) {
+                return Err(why);
+            }
+            ae3_audio::decode_wem(&clip.bytes).map_err(|e| e.to_string())
+        }
+        _ => Err("the sound is not in the opened Package".to_owned()),
+    };
+    ae3_core::guard::catch_panic(decode)
+        .unwrap_or_else(|panic| Err(format!("the decoder failed: {panic}")))
 }
 
 /// Re-applies a channel mask to the detail image.

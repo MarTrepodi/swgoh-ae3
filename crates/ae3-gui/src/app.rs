@@ -18,10 +18,12 @@ use crate::model::Model;
 use crate::model::extract::{ExtractRequest, ExtractSummary};
 use crate::model::lru::{ByteLru, rgba_bytes};
 use crate::model::mesh::OrbitCamera;
+use crate::model::playback::{Action, Playback, SoundRef, unplayable_sound};
 use crate::model::release::ReleaseState;
 use crate::model::startup::LatestDecision;
 use crate::model::table::SearchMatches;
 use crate::model::viewer::{Channels, ViewTransform};
+use crate::output::{DeviceOutput, Output};
 use crate::tasks::{self, DetailContent, Mailbox, Msg, Opened, Services, Store};
 use crate::ui::mesh::{self, MeshRenderer};
 use crate::worker::{Outbox, Pool, pool_size, spawn_long};
@@ -105,6 +107,12 @@ pub struct Ae3App {
     thumb_queue: Vec<i64>,
     pub detail: Option<Detail>,
     detail_counter: u64,
+    /// Which sound of the preview plays, and which cannot.
+    pub playback: Playback,
+    /// The playback generation decodes are for; a decode started for an
+    /// older one is skipped.
+    playback_current: Arc<AtomicU64>,
+    audio: Box<dyn Output>,
     /// Draws the detail viewer's Mesh; shared with its paint callback.
     pub mesh_renderer: Arc<Mutex<MeshRenderer>>,
     extract_cancel: Option<Arc<AtomicBool>>,
@@ -126,6 +134,10 @@ impl Ae3App {
         crate::ui::install_fonts(ctx);
         let repaint = ctx.clone();
         let (outbox, inbox) = Outbox::new(move || repaint.request_repaint());
+        let ended = outbox.clone();
+        let audio = DeviceOutput::new(Arc::new(move |generation, error| {
+            ended.send(Msg::PlaybackEnded { generation, error });
+        }));
         let mut model = Model::default();
         model.notice = notice;
         model.version_text = config_file
@@ -160,6 +172,9 @@ impl Ae3App {
             thumb_queue: Vec::new(),
             detail: None,
             detail_counter: 0,
+            playback: Playback::default(),
+            playback_current: Arc::new(AtomicU64::new(0)),
+            audio: Box::new(audio),
             mesh_renderer: Arc::default(),
             extract_cancel: None,
             diff_store: None,
@@ -493,6 +508,8 @@ impl Ae3App {
         self.thumb_failed.clear();
         self.thumb_queue.clear();
         self.detail = None;
+        let stop = self.playback.reset();
+        self.apply_playback(stop);
     }
 
     /// Opens the preview for the selection, or closes it.
@@ -591,6 +608,11 @@ impl Ae3App {
             return;
         };
         let package = bundle.name().to_owned();
+        let bundle = Arc::clone(bundle);
+        if let Some(old) = &self.detail {
+            let stop = self.playback.stop_sound(SoundRef::Clip(old.asset.path_id));
+            self.apply_playback(stop);
+        }
         self.detail_counter += 1;
         let generation = self.detail_counter;
         self.detail = Some(Detail {
@@ -606,7 +628,6 @@ impl Ae3App {
             camera: OrbitCamera::default(),
             open: true,
         });
-        let bundle = Arc::clone(bundle);
         let asset = asset.clone();
         let max_side = self.max_texture_side;
         let outbox = self.outbox.clone();
@@ -630,6 +651,10 @@ impl Ae3App {
     /// Forgets a detail viewer the user closed, freeing its texture.
     fn drop_closed_detail(&mut self) {
         if let Some(detail) = self.detail.take_if(|d| !d.open) {
+            let stop = self
+                .playback
+                .stop_sound(SoundRef::Clip(detail.asset.path_id));
+            self.apply_playback(stop);
             self.textures.remove(&TexKey {
                 package: detail.package,
                 path_id: detail.asset.path_id,
@@ -658,6 +683,55 @@ impl Ae3App {
         });
         if let Some(detail) = &mut self.detail {
             detail.shown_channels = channels;
+        }
+    }
+
+    // ---- Playback -------------------------------------------------------
+
+    /// The play control of a preview sound was pressed: plays it, or stops
+    /// it when it is the one playing.
+    pub fn toggle_sound(&mut self, sound: SoundRef) {
+        let action = self.playback.toggle(sound);
+        self.apply_playback(action);
+    }
+
+    /// Carries out what the playback model asked for.
+    fn apply_playback(&mut self, action: Action) {
+        self.playback_current
+            .store(self.playback.generation(), Ordering::Relaxed);
+        match action {
+            Action::None => {}
+            Action::Stop => self.audio.stop(),
+            Action::Decode { sound, generation } => {
+                // The old sound stops now, not when the new one is ready.
+                self.audio.stop();
+                let Some(from) = self.opened.as_ref().map(Opened::sound_source) else {
+                    self.playback
+                        .decoded(generation, Err("nothing is open".to_owned()));
+                    return;
+                };
+                let current = Arc::clone(&self.playback_current);
+                let outbox = self.outbox.clone();
+                self.pool.spawn(move || {
+                    if current.load(Ordering::Relaxed) != generation {
+                        return;
+                    }
+                    let result = tasks::decode_sound(&from, sound);
+                    outbox.send(Msg::SoundDecoded { generation, result });
+                });
+            }
+        }
+    }
+
+    fn sound_decoded(&mut self, generation: u64, result: Result<ae3_core::ae3_audio::Pcm, String>) {
+        let (outcome, pcm) = match result {
+            Ok(pcm) => (Ok(()), Some(pcm)),
+            Err(e) => (Err(e), None),
+        };
+        if self.playback.decoded(generation, outcome)
+            && let Some(pcm) = pcm
+        {
+            self.audio.play(generation, pcm);
         }
     }
 
@@ -879,6 +953,8 @@ impl Ae3App {
                 };
                 self.upload(ctx, key, color, true);
             }
+            Msg::SoundDecoded { generation, result } => self.sound_decoded(generation, result),
+            Msg::PlaybackEnded { generation, error } => self.playback.ended(generation, error),
             Msg::ExtractProgress {
                 generation,
                 progress,
@@ -965,7 +1041,15 @@ impl Ae3App {
                         let kinds = *kinds;
                         self.model.learn_kinds(row_id, kinds);
                     }
-                    Opened::Audio { sounds } => preview.set_sounds(sounds.clone()),
+                    Opened::Audio { sounds, .. } => {
+                        for sound in sounds {
+                            if let Some(why) = unplayable_sound(sound) {
+                                self.playback
+                                    .set_unplayable(SoundRef::Sound(sound.index), why);
+                            }
+                        }
+                        preview.set_sounds(sounds.clone());
+                    }
                 }
                 self.opened = Some(opened);
             }
@@ -1027,6 +1111,14 @@ impl Ae3App {
             path_id: detail.asset.path_id,
             full: true,
         };
+        if let Ok(DetailContent::Audio {
+            unplayable: Some(why),
+            ..
+        }) = &result
+        {
+            self.playback
+                .set_unplayable(SoundRef::Clip(detail.asset.path_id), why.clone());
+        }
         detail.content = Some(result);
         if let Some(image) = image {
             self.upload(ctx, key, image, true);
@@ -1107,6 +1199,7 @@ impl eframe::App for Ae3App {
         if let Some(gl) = gl {
             mesh::lock(&self.mesh_renderer).destroy(gl);
         }
+        self.audio.stop();
         if self.config_dirty_since.is_some()
             && let Some(path) = &self.config_path
         {
@@ -1857,5 +1950,165 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// What a test output was asked to do.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Played {
+        Play { generation: u64, frames: usize },
+        Stop,
+    }
+
+    /// An [`Output`] that records instead of opening a device.
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<Mutex<Vec<Played>>>);
+
+    impl Recorder {
+        fn take(&self) -> Vec<Played> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    impl Output for Recorder {
+        fn play(&mut self, generation: u64, pcm: ae3_core::ae3_audio::Pcm) {
+            self.0.lock().unwrap().push(Played::Play {
+                generation,
+                frames: pcm.frames(),
+            });
+        }
+
+        fn stop(&mut self) {
+            self.0.lock().unwrap().push(Played::Stop);
+        }
+    }
+
+    /// Playback end to end without a sound device: Play decodes on the pool
+    /// and hands the samples to the output, the control turns into Stop,
+    /// nothing animates while the sound plays, the output's end report
+    /// resets it, an undecodable codec shows "can't play", and a preview
+    /// change stops playback and drops a decode still in flight.
+    #[test]
+    fn sounds_play_from_the_preview_and_stop_with_it() {
+        use crate::model::playback::{PlayState, unplayable_sound};
+
+        let Some(dir) = fixtures() else { return };
+        let path = dir.join("audio_sharedui.wwpkg");
+        if !path.exists() {
+            eprintln!("skipping: no {}", path.display());
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut app = app_with_manifest(&ctx);
+        let recorder = Recorder::default();
+        app.audio = Box::new(recorder.clone());
+        let row = app
+            .model
+            .rows
+            .iter()
+            .find(|r| r.name == "audio_x")
+            .map(|r| r.id)
+            .unwrap();
+        app.model.click_row(row, ClickModifiers::default());
+        app.model.open_preview(row);
+
+        let package = Arc::new(ae3_core::LoadedAudioPackage::open_file(&path).unwrap());
+        let mut sounds = package.sound_infos();
+        // The first sound that decodes, so its row is on screen.
+        let playable = sounds
+            .iter()
+            .filter(|s| unplayable_sound(s).is_none())
+            .find(|s| {
+                package
+                    .package()
+                    .decode_pcm(&package.sounds()[s.index])
+                    .is_ok()
+            })
+            .map(|s| s.index)
+            .expect("a playable sound");
+        let opus = sounds.iter().position(|s| s.index != playable).unwrap();
+        sounds[opus].codec = Some("Opus");
+        let generation = app.preview_generation.load(Ordering::Relaxed);
+        app.preview_opened(generation, Ok(Opened::Audio { package, sounds }));
+        let texts = painted_texts(&ctx, &mut app);
+        assert!(texts.iter().any(|t| t == "▶ Play"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "can't play"), "{texts:?}");
+        assert_eq!(
+            app.playback.state(SoundRef::Sound(opus)),
+            PlayState::Unplayable("Opus is not decoded")
+        );
+
+        let sound = SoundRef::Sound(playable);
+        app.toggle_sound(sound);
+        assert_eq!(
+            app.playback.state(sound),
+            PlayState::Decoding,
+            "decoding happens on the pool, not in the click"
+        );
+        pump(&ctx, &mut app, |app| {
+            app.playback.state(sound) == PlayState::Playing
+        });
+        let played = recorder.take();
+        let generation = app.playback.generation();
+        assert!(
+            matches!(
+                played.as_slice(),
+                [Played::Stop, Played::Play { generation: g, frames }]
+                    if *g == generation && *frames > 0
+            ),
+            "{played:?}"
+        );
+        let texts = painted_texts(&ctx, &mut app);
+        assert!(texts.iter().any(|t| t == "■ Stop"), "{texts:?}");
+        assert!(
+            settled_repaint_delay(&ctx, &mut app) >= IDLE,
+            "playing schedules no repaint; the end report wakes the UI"
+        );
+
+        app.handle(
+            &ctx,
+            Msg::PlaybackEnded {
+                generation,
+                error: None,
+            },
+        );
+        assert_eq!(app.playback.state(sound), PlayState::Idle);
+
+        // Changing the preview stops playback; the decode that was still
+        // running is dropped when it arrives.
+        app.toggle_sound(sound);
+        let generation = app.playback.generation();
+        recorder.take();
+        app.clear_preview_resources();
+        assert_eq!(recorder.take(), [Played::Stop]);
+        app.sound_decoded(
+            generation,
+            Ok(ae3_core::ae3_audio::Pcm {
+                channels: 1,
+                sample_rate: 48_000,
+                samples: vec![0; 480],
+            }),
+        );
+        assert_eq!(recorder.take(), []);
+        assert_eq!(app.playback.state(sound), PlayState::Idle);
+    }
+
+    /// A WAV AudioClip decodes through the same path as a WEM, and an FSB
+    /// one is refused before trying.
+    #[test]
+    fn audio_clips_decode_only_as_wav() {
+        let wav = ae3_core::ae3_audio::Pcm {
+            channels: 2,
+            sample_rate: 22_050,
+            samples: vec![1, -1, 2, -2],
+        }
+        .to_wav()
+        .unwrap();
+        assert_eq!(ae3_core::sniff_audio_extension(&wav), "wav");
+        let pcm = ae3_core::ae3_audio::decode_wem(&wav).unwrap();
+        assert_eq!(
+            (pcm.channels, pcm.sample_rate, pcm.frames()),
+            (2, 22_050, 2)
+        );
+        assert!(crate::model::playback::unplayable_clip("fsb").is_some());
     }
 }

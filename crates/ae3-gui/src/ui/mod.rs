@@ -199,7 +199,7 @@ mod tests {
             assert!(ok, "no glyph for {kind}: {g}");
         }
         // Symbols the UI uses besides the kind glyphs.
-        for extra in ["×", "▶", "↻", "▴", "▾", "…", "—", "●"] {
+        for extra in ["×", "▶", "■", "↻", "▴", "▾", "…", "—", "●"] {
             let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), extra));
             assert!(ok, "no glyph {extra}");
         }
