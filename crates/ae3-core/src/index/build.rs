@@ -8,10 +8,13 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ae3_unity::{Probe, ProbeListing, probe_prefix};
+use ae3_unity::{Probe, ProbeListing, probe_prefix_filtered};
 use serde::Serialize;
 
-use super::{AssetIndex, BundleContents, BundleRecord, IndexError, IndexFile, default_index_path};
+use super::predict::FirstProbe;
+use super::{
+    AssetIndex, BundleContents, BundleRecord, IndexError, IndexFile, default_index_path, wants_name,
+};
 use crate::cache::PackageCache;
 use crate::diff::ENGINE_REBUILD_RATIO;
 use crate::download::DEFAULT_PARALLEL_DOWNLOADS;
@@ -21,15 +24,21 @@ use crate::platform::Platform;
 use crate::store::PackageStore;
 use crate::version::{AssetVersion, CdnLocation};
 
-/// The first prefix fetched of each Bundle. Small Bundles (portraits, icons)
-/// list in about 1.5 KB and single Atlases in under 4 KB, so one request
-/// usually suffices; larger SerializedFiles ask for more.
+/// The first prefix fetched of a Bundle when nothing predicts better. Small
+/// Bundles (portraits, icons) list in about 1.5 KB and single Atlases in under
+/// 4 KB, so one request usually suffices; larger SerializedFiles ask for
+/// more.
 pub const DEFAULT_FIRST_PROBE_LEN: u64 = 4 * 1024;
 /// How many newly probed Bundles are kept in memory before the index file is
 /// saved again.
 pub const DEFAULT_SAVE_EVERY: usize = 500;
 /// Prefix rounds per Bundle before giving up; the prober converges in three.
 const MAX_ROUNDS: usize = 12;
+/// The least a prefix grows by between rounds. The prober's estimate of
+/// what it lacks is often a little short, and another request costs far more
+/// time than this many bytes, so asking for a little more saves the trickle
+/// of tiny rounds that would follow.
+const MIN_GROWTH: u64 = 16 * 1024;
 /// How often idle threads look at the pause and cancel flags.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -38,8 +47,14 @@ const POLL: Duration = Duration::from_millis(50);
 pub struct IndexOptions {
     /// Bundles probed at once.
     pub parallel: usize,
-    /// Bytes fetched first from each Bundle.
+    /// Bytes fetched first from a Bundle when nothing predicts better.
     pub first_probe_len: u64,
+    /// Predict how much of each Bundle to fetch first from what earlier
+    /// probes needed: the Bundle's own probe at its previous Content Hash,
+    /// or else recent probes of its Category and size class. Most probes
+    /// then take one request instead of two to four. Off, every probe
+    /// starts with [`IndexOptions::first_probe_len`].
+    pub predict_first_probe: bool,
     /// Save the index file after this many newly probed Bundles (and always
     /// when the run ends, pauses or is cancelled).
     pub save_every: usize,
@@ -56,6 +71,7 @@ impl Default for IndexOptions {
         Self {
             parallel: DEFAULT_PARALLEL_DOWNLOADS,
             first_probe_len: DEFAULT_FIRST_PROBE_LEN,
+            predict_first_probe: true,
             save_every: DEFAULT_SAVE_EVERY,
             retry_failed: false,
             reprobe_all: false,
@@ -191,8 +207,9 @@ pub struct IndexRun {
 ///
 /// Probes run on [`IndexOptions::parallel`] threads, each Bundle read from
 /// the download cache when a full copy is there and otherwise range-fetched
-/// from the CDN, starting with [`IndexOptions::first_probe_len`] bytes and
-/// growing to what the prober asks for (never beyond the Package's size).
+/// from the CDN, starting with a predicted length (see
+/// [`IndexOptions::predict_first_probe`]) and growing to what the prober asks
+/// for (never beyond the Package's size).
 /// Progress is saved every [`IndexOptions::save_every`] Bundles, on pause and
 /// at the end, so a later run resumes where this one stopped.
 pub struct IndexBuilder<T> {
@@ -366,6 +383,11 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
             Err(e) => (IndexFile::new(self.platform), Some(e.to_string())),
         };
         let (plan, jobs) = self.plan_for(&file);
+        let first = if self.options.predict_first_probe {
+            FirstProbe::learned_from(self.options.first_probe_len, &file, &self.manifest)
+        } else {
+            FirstProbe::fixed(self.options.first_probe_len)
+        };
         let pruned = file.retain_manifest(&self.manifest);
         let version_changed = file.asset_version() != self.manifest.asset_version;
         file.set_asset_version(self.manifest.asset_version);
@@ -390,12 +412,14 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
 
         let mut unsaved = !jobs.is_empty()
             || pruned > 0
+            || !file.is_current_format()
             || version_changed
             || report.discarded_index.is_some()
             || !self.path.exists();
         if !jobs.is_empty() {
             self.probe_all(
                 &jobs,
+                &first,
                 &mut file,
                 &mut report,
                 &counters,
@@ -422,6 +446,7 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
     fn probe_all(
         &self,
         jobs: &[&Package],
+        first: &FirstProbe,
         file: &mut IndexFile,
         report: &mut IndexReport,
         counters: &Counters,
@@ -444,11 +469,13 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
                         let Some(package) = jobs.get(i) else { break };
                         // A prober panic marks this Bundle unreadable
                         // instead of ending the run.
-                        let result =
-                            crate::guard::catch_panic(|| self.probe(package, counters, cancel))
-                                .unwrap_or_else(|message| {
-                                    Err(Failure::Unreadable(format!("prober panicked: {message}")))
-                                });
+                        let first_len = first.len_for(package);
+                        let result = crate::guard::catch_panic(|| {
+                            self.probe(package, first_len, counters, cancel)
+                        })
+                        .unwrap_or_else(|message| {
+                            Err(Failure::Unreadable(format!("prober panicked: {message}")))
+                        });
                         if tx.send((i, result)).is_err() {
                             break;
                         }
@@ -490,12 +517,14 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
                 let package = jobs[i];
                 let record = |result| BundleRecord {
                     content_hash: package.content_hash,
+                    size: package.size,
                     result,
                 };
                 match result {
                     Ok(probed) => {
                         report.probed += 1;
                         report.from_cache += usize::from(probed.from_cache);
+                        first.learn(package, probed.listing.bytes_used);
                         let contents = BundleContents::from_listing(&probed.listing);
                         file.insert(package.name.clone(), record(Ok(Arc::new(contents))));
                     }
@@ -552,11 +581,12 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
     fn probe(
         &self,
         package: &Package,
+        first_len: u64,
         counters: &Counters,
         cancel: &AtomicBool,
     ) -> Result<Probed, Failure> {
         if let Some(mut source) = self.cached_file(package) {
-            match probe_file(&mut source, package.size, self.options.first_probe_len) {
+            match probe_file(&mut source, package.size, first_len) {
                 Ok(listing) => {
                     return Ok(Probed {
                         listing,
@@ -572,26 +602,21 @@ impl<T: Transport + Send + Sync> IndexBuilder<T> {
             .location
             .package_url(self.platform, package)
             .ok_or_else(|| Failure::Unreadable("not a Bundle".to_owned()))?;
-        let listing = probe_network(
-            &url,
-            package.size,
-            self.options.first_probe_len,
-            &|start, end| {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(Failure::Cancelled);
-                }
-                let response = self
-                    .cache
-                    .downloader()
-                    .fetch_range(&url, start, end)
-                    .map_err(|e| Failure::Fetch(e.to_string()))?;
-                counters.requests.fetch_add(1, Ordering::Relaxed);
-                counters
-                    .bytes
-                    .fetch_add(response.bytes.len() as u64, Ordering::Relaxed);
-                Ok((response.bytes, response.total_len))
-            },
-        )?;
+        let listing = probe_network(&url, package.size, first_len, &|start, end| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Failure::Cancelled);
+            }
+            let response = self
+                .cache
+                .downloader()
+                .fetch_range(&url, start, end)
+                .map_err(|e| Failure::Fetch(e.to_string()))?;
+            counters.requests.fetch_add(1, Ordering::Relaxed);
+            counters
+                .bytes
+                .fetch_add(response.bytes.len() as u64, Ordering::Relaxed);
+            Ok((response.bytes, response.total_len))
+        })?;
         Ok(Probed {
             listing,
             from_cache: false,
@@ -654,7 +679,7 @@ fn probe_file(file: &mut File, size: u64, first: u64) -> Result<ProbeListing, Fa
         }
         match next_round(&buf, total)? {
             Round::Done(listing) => return Ok(listing),
-            Round::Grow(at_least) => want = at_least,
+            Round::Grow(at_least) => want = grow(buf.len() as u64, at_least, total),
         }
     }
     Err(too_many_rounds())
@@ -691,7 +716,7 @@ fn probe_network(
         buf.truncate(usize::try_from(total).unwrap_or(usize::MAX));
         match next_round(&buf, total)? {
             Round::Done(listing) => return Ok(listing),
-            Round::Grow(at_least) => want = at_least,
+            Round::Grow(at_least) => want = grow(buf.len() as u64, at_least, total),
         }
     }
     Err(too_many_rounds())
@@ -707,7 +732,7 @@ enum Round {
 }
 
 fn next_round(prefix: &[u8], total: u64) -> Result<Round, Failure> {
-    match probe_prefix(prefix, total) {
+    match probe_prefix_filtered(prefix, total, &wants_name) {
         Ok(Probe::Listed(listing)) => Ok(Round::Done(listing)),
         Ok(Probe::NeedMore { at_least }) if at_least > prefix.len() as u64 => {
             Ok(Round::Grow(at_least.min(total)))
@@ -717,6 +742,12 @@ fn next_round(prefix: &[u8], total: u64) -> Result<Round, Failure> {
         )),
         Err(e) => Err(Failure::Unreadable(e.to_string())),
     }
+}
+
+/// The next prefix length: what the prober asks for, but at least
+/// [`MIN_GROWTH`] more than `have`, and never past the end.
+fn grow(have: u64, at_least: u64, total: u64) -> u64 {
+    at_least.max(have + MIN_GROWTH).min(total)
 }
 
 fn too_many_rounds() -> Failure {

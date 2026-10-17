@@ -10,7 +10,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
 
 - **Automatic asset version detection.** Finds the latest asset version and content location on every run, and falls back to cached and probed values when the usual source is unavailable.
 - **All three platforms' assets.** Windows, Android and iOS asset sets.
-- **Asset search.** Finds every bundle that contains an asset whose name matches your search, using an index AE3 builds in the background. Building the index reads only as much of each bundle as it takes to list its assets, and later game releases re-check only the bundles that changed. The first build for a platform takes a few minutes.
+- **Asset search.** Finds every bundle that contains an asset whose name matches your search, using an index AE3 builds in the background. Building the index reads only as much of each bundle as it takes to list its assets, and later game releases re-check only the bundles that changed. The first build for a platform takes a minute or two.
 - **Live preview.** Select a bundle to see its contents right away:
   - textures, with zoom and per-channel views
   - sprite atlases, with each sprite outlined
