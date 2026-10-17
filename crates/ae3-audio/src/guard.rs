@@ -1,14 +1,23 @@
-//! Checks for WEM contents that ww2ogg trusts without checking.
+//! Keeping corrupt WEMs from panicking the Vorbis dependencies.
 //!
 //! ww2ogg 0.1 indexes its mode table with the mode number of every "modified"
 //! audio packet (the packet form of current Wwise versions) and computes
 //! `channels - 1`, so a corrupt packet or a zero channel count panics instead
-//! of returning an error. Release builds abort on panic, so these inputs are
-//! rejected before ww2ogg sees them. The mode table comes from a
-//! header-only conversion: a copy of the WEM cut off before its first audio
-//! packet, which ww2ogg turns into just the three Vorbis headers.
+//! of returning an error. [`check`] rejects these inputs before ww2ogg sees
+//! them. The mode table comes from a header-only conversion: a copy of the
+//! WEM cut off before its first audio packet, which ww2ogg turns into just
+//! the three Vorbis headers.
+//!
+//! What cannot be checked up front is caught: ww2ogg and lewton do unchecked
+//! arithmetic on decoded values (lewton's floor curve, for one), which
+//! overflow checks in debug builds turn into panics, and future releases may
+//! panic in other places. Every call into them runs through [`contain`].
+//! That only helps while panics unwind; AE3's release profile keeps
+//! `panic = "unwind"` for this reason.
 
+use std::any::Any;
 use std::io::Cursor;
+use std::panic::{self, AssertUnwindSafe};
 
 use ogg::PacketReader;
 use ww2ogg::{CodebookLibrary, WemResult, WwiseRiffVorbis};
@@ -16,6 +25,21 @@ use ww2ogg::{CodebookLibrary, WemResult, WwiseRiffVorbis};
 use crate::bytes::{Endian, Reader};
 use crate::revorb::ModeTable;
 use crate::wem::WemInfo;
+
+/// Runs `work`, turning a panic inside it into `Err` with the panic message.
+/// `work` must not leave shared state half-updated; callers only pass
+/// closures over their own locals.
+pub(crate) fn contain<T>(work: impl FnOnce() -> T) -> Result<T, String> {
+    panic::catch_unwind(AssertUnwindSafe(work)).map_err(|payload| message(&*payload))
+}
+
+fn message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic with a non-string payload".to_owned())
+}
 
 /// Values of the vorb "mod signal" field that mean unmodified packets.
 const UNMODIFIED_PACKETS: [u32; 4] = [0x4A, 0x4B, 0x69, 0x70];
@@ -136,4 +160,26 @@ fn header_modes(
         .map_err(|e| e.to_string())?
         .ok_or("header-only conversion has no setup header")?;
     ModeTable::from_setup(&setup.data).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contain_passes_values_through_and_catches_panics() {
+        assert_eq!(contain(|| 7), Ok(7));
+        assert_eq!(
+            contain(|| -> u8 { panic!("bad floor {}", 3) }),
+            Err("bad floor 3".to_owned())
+        );
+        assert_eq!(
+            contain(|| -> u8 { panic!("plain") }),
+            Err("plain".to_owned())
+        );
+        assert_eq!(
+            contain(|| -> u8 { panic::panic_any(5_u32) }),
+            Err("panic with a non-string payload".to_owned())
+        );
+    }
 }

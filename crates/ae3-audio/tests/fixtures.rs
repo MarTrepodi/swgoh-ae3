@@ -202,16 +202,9 @@ fn streamed_sounds_are_listed_with_language_and_size() {
 
 /// Corrupts a real Vorbis WEM byte by byte (header, setup and audio) and
 /// truncates it at many lengths: conversion must return a value or an error,
-/// never panic.
-///
-/// Debug builds are skipped: ww2ogg and lewton do unchecked arithmetic on
-/// decoded values that only overflow-checks turn into panics. Run it with
-/// `cargo test --release`.
+/// never panic. In debug builds lewton's unchecked arithmetic overflows on
+/// some of these inputs; the crate contains those panics.
 #[test]
-#[cfg_attr(
-    debug_assertions,
-    ignore = "dependencies overflow-check in debug builds; run with --release"
-)]
 fn corrupt_vorbis_never_panics() {
     let Some(bytes) = fixture("audio_ui_datacrons.wwpkg") else {
         return;

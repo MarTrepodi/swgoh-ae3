@@ -96,6 +96,9 @@ fn no_books() -> WemResult<CodebookLibrary> {
 /// parses the rebuilt setup header. A result that converts but trips
 /// ww2ogg's clipping heuristic (which genuinely loud audio does) is kept as
 /// a fallback, provided lewton decodes all of it.
+///
+/// Every call into ww2ogg and lewton runs under [`guard::contain`], so a
+/// panic on corrupt data counts as that attempt failing.
 fn vorbis_to_ogg(wem: &[u8], info: &WemInfo) -> Result<Vec<u8>> {
     const ATTEMPTS: [(&str, Books, bool); 3] = [
         ("aoTuV 6.03", CodebookLibrary::aotuv_codebooks, false),
@@ -105,35 +108,46 @@ fn vorbis_to_ogg(wem: &[u8], info: &WemInfo) -> Result<Vec<u8>> {
     let mut failures = Vec::new();
     let mut fallback = None;
     for (name, books, inline) in ATTEMPTS {
-        match attempt(wem, info, books, inline) {
-            Ok(ogg) => match ww2ogg::validate(&ogg) {
-                Ok(()) => return Ok(ogg),
-                Err(e) => {
-                    if fallback.is_none() && decodes_fully(&ogg) {
-                        fallback = Some(ogg);
-                    }
-                    failures.push(format!("{name} codebooks: {e}"));
+        let converted = guard::contain(|| attempt(wem, info, books, inline))
+            .unwrap_or_else(|panic| Err(format!("converter panicked: {panic}")));
+        let ogg = match converted {
+            Ok(ogg) => ogg,
+            Err(e) => {
+                failures.push(format!("{name} codebooks: {e}"));
+                continue;
+            }
+        };
+        match guard::contain(|| ww2ogg::validate(&ogg)) {
+            Ok(Ok(())) => return Ok(ogg),
+            Ok(Err(e)) => {
+                if fallback.is_none() && decodes_fully(&ogg) {
+                    fallback = Some(ogg);
                 }
-            },
-            Err(e) => failures.push(format!("{name} codebooks: {e}")),
+                failures.push(format!("{name} codebooks: {e}"));
+            }
+            Err(panic) => failures.push(format!("{name} codebooks: decoder panicked: {panic}")),
         }
     }
     fallback.ok_or_else(|| Error::Vorbis(failures.join("; ")))
 }
 
-/// Whether lewton decodes every packet of `ogg` and finds some audio.
+/// Whether lewton decodes every packet of `ogg`, without panicking, and
+/// finds some audio.
 fn decodes_fully(ogg: &[u8]) -> bool {
-    let Ok(mut reader) = lewton::inside_ogg::OggStreamReader::new(Cursor::new(ogg)) else {
-        return false;
-    };
-    let mut samples = 0usize;
-    loop {
-        match reader.read_dec_packet_itl() {
-            Ok(Some(packet)) => samples += packet.len(),
-            Ok(None) => return samples > 0,
-            Err(_) => return false,
+    guard::contain(|| {
+        let Ok(mut reader) = lewton::inside_ogg::OggStreamReader::new(Cursor::new(ogg)) else {
+            return false;
+        };
+        let mut samples = 0usize;
+        loop {
+            match reader.read_dec_packet_itl() {
+                Ok(Some(packet)) => samples += packet.len(),
+                Ok(None) => return samples > 0,
+                Err(_) => return false,
+            }
         }
-    }
+    })
+    .unwrap_or(false)
 }
 
 fn attempt(wem: &[u8], info: &WemInfo, books: Books, inline: bool) -> Result<Vec<u8>, String> {
