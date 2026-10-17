@@ -120,15 +120,13 @@ impl Ae3App {
         crate::ui::install_fonts(ctx);
         let repaint = ctx.clone();
         let (outbox, inbox) = Outbox::new(move || repaint.request_repaint());
-        let model = Model {
-            notice,
-            version_text: config_file
-                .gui
-                .last_asset_version
-                .map(|v| v.to_string())
-                .unwrap_or_default(),
-            ..Model::default()
-        };
+        let mut model = Model::default();
+        model.notice = notice;
+        model.version_text = config_file
+            .gui
+            .last_asset_version
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         Self {
             model,
             services: Arc::new(Services::new(config.clone())),
@@ -321,7 +319,8 @@ impl Ae3App {
         }
         self.clear_preview_resources();
         let Some(row) = self.model.wanted_preview().cloned() else {
-            self.model.preview = None;
+            self.model.close_preview();
+            self.release_unused_dependencies();
             return;
         };
         let Some(store) = self.store.clone() else {
@@ -329,11 +328,23 @@ impl Ae3App {
         };
         let generation = self.preview_generation.load(Ordering::Relaxed);
         self.model.open_preview(row.id);
+        // Before the new preview starts parsing its own dependencies.
+        self.release_unused_dependencies();
         let current = Arc::clone(&self.preview_generation);
         let outbox = self.outbox.clone();
         self.pool.spawn(move || {
             tasks::open_package(&store, &row.name, row.kind, generation, &current, &outbox);
         });
+    }
+
+    /// Drops the dependency Bundles the stores keep parsed once the model
+    /// says nothing needs them, so memory does not grow while browsing.
+    fn release_unused_dependencies(&mut self) {
+        if self.model.take_dependency_release() {
+            for store in [&self.store, &self.diff_store].into_iter().flatten() {
+                store.release_dependencies();
+            }
+        }
     }
 
     /// Asks for a thumbnail of the preview's Asset `path_id`; decoded in
@@ -695,6 +706,8 @@ impl Ae3App {
                 if self.model.extract_job.finish(generation, outcome) {
                     self.extract_cancel = None;
                     self.model.summary = Some(summary);
+                    self.model.extraction_ended();
+                    self.release_unused_dependencies();
                 }
             }
             Msg::DiffDone { generation, result } => {
