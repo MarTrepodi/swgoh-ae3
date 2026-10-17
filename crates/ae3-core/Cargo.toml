@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+ae3-audio.workspace = true
+ae3-image.workspace = true
+ae3-unity.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

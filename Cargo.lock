@@ -157,6 +157,9 @@ dependencies = [
 name = "ae3-core"
 version = "0.1.0"
 dependencies = [
+ "ae3-audio",
+ "ae3-image",
+ "ae3-unity",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
