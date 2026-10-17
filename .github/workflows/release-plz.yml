@@ -1,0 +1,61 @@
+# Versioning and changelog (release-plz.toml). On every push to main:
+# - release-plz-pr opens or updates the release PR from conventional commits;
+# - release-plz-release, when that PR has just been merged, pushes the
+#   vX.Y.Z tag that starts release.yml (cargo-dist).
+#
+# RELEASE_PLZ_TOKEN must be a fine-grained token or GitHub App token with
+# contents and pull-requests write access. With the default GITHUB_TOKEN,
+# GitHub starts no workflows for the release PR (so CI would not run on it)
+# or for the tag (so no release would be built).
+name: Release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-plz-release:
+    name: Tag release
+    if: github.repository_owner == 'swgoh-utils'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: release-plz/action@v0.5
+        with:
+          command: release
+          version: 0.3.172
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+  release-plz-pr:
+    name: Release PR
+    if: github.repository_owner == 'swgoh-utils'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+          version: 0.3.172
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

@@ -35,20 +35,31 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
 
 ## Installation
 
-Pre-built binaries will be published on the [Releases](https://github.com/swgoh-utils/swgoh-ae3/releases) page. Each release includes:
+Pre-built binaries are published on the [Releases](https://github.com/swgoh-utils/swgoh-ae3/releases) page. The CLI and the GUI come as separate archives:
 
-| Platform | CLI | GUI |
+| Platform | CLI archive (contains) | GUI archive (contains) |
 |---|---|---|
-| Windows x86_64 | `ae3.exe` | `ae3-gui.exe` |
-| macOS (Apple silicon) | `ae3` | `AE3.app` |
-| Linux x86_64 / aarch64 | `ae3` | `ae3-gui` (plus a `.desktop` file) |
+| Windows x86_64 | `ae3-x86_64-pc-windows-msvc.zip` (`ae3.exe`) | `ae3-gui-x86_64-pc-windows-msvc.zip` (`ae3-gui.exe`) |
+| macOS (Apple silicon) | `ae3-aarch64-apple-darwin.tar.xz` (`ae3`) | `ae3-gui-aarch64-apple-darwin.zip` (`AE3.app`) |
+| Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
+| Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`) |
 
-Early releases are not code-signed:
+Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). Each archive has a `.sha256` checksum file next to it on the release page. The binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).
 
-- **macOS:** right-click `AE3.app` and choose **Open** the first time, or run:
+To add the GUI to a Linux desktop's application menu, run this from the extracted folder:
+
+```bash
+install -Dm755 ae3-gui ~/.local/bin/ae3-gui && install -Dm644 ae3-gui.desktop ~/.local/share/applications/ae3-gui.desktop
+```
+
+The `.desktop` file starts `ae3-gui` from your `PATH`, so `~/.local/bin` must be on it.
+
+Early releases are not code-signed. `AE3.app` is signed ad hoc only:
+
+- **macOS:** the first launch of `AE3.app` or `ae3` is blocked. Open **System Settings** → **Privacy & Security** and choose **Open Anyway**, or clear the download quarantine first:
 
   ```bash
-  xattr -d com.apple.quarantine AE3.app
+  xattr -dr com.apple.quarantine AE3.app ae3
   ```
 
 - **Windows:** SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
@@ -174,6 +185,22 @@ The binaries are written to `target/release/`. To include the HTTP API:
 ```bash
 cargo build --release -p ae3 --features serve
 ```
+
+The release archives are built without `serve`.
+
+### Releasing
+
+Releases are cut from conventional commits (`feat:`, `fix:`, `perf:` and so on). On every push to `main`, [release-plz](https://release-plz.dev) opens or updates a release PR that bumps the shared workspace version and adds the new section to `CHANGELOG.md`. Merging that PR tags `vX.Y.Z`, and the tag starts [cargo-dist](https://axodotdev.github.io/cargo-dist/) in `.github/workflows/release.yml`, which builds the archives above and publishes the GitHub Release. Nothing is published to crates.io.
+
+The first release is the exception: release-plz opens no PR while `CHANGELOG.md` already has the hand-written 0.1.0 section, so push its tag yourself:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), `type(scope): summary`, with a crate (`core`, `unity`, `image`, `audio`, `cli`, `gui`) or area (`ci`, `release`, `readme`) as the scope.
+
+`release.yml` is generated: change `[workspace.metadata.dist]` in `Cargo.toml`, then run `dist generate`. Pull requests run `dist plan` to check the release config.
 
 ## License
 

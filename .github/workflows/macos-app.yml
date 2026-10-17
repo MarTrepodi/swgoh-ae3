@@ -1,0 +1,53 @@
+# cargo-dist custom job (local-artifacts-jobs in Cargo.toml). release.yml
+# calls it alongside its own builds; every `artifacts-*` upload ends up on
+# the GitHub Release. It ships the macOS GUI as AE3.app, which dist cannot
+# build, so ae3-gui's dist targets leave out aarch64-apple-darwin.
+name: macOS app
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: AE3.app (macOS arm64)
+    runs-on: macos-14
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+
+      # The same steps dist runs from .github/build-setup.yml.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      - name: Generate THIRD-PARTY-LICENSES.md
+        run: |
+          cargo fetch --locked
+          cargo about generate --workspace --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
+
+      - name: Build ae3-gui
+        run: cargo build --profile dist --locked -p ae3-gui --target aarch64-apple-darwin
+
+      - name: Bundle AE3.app
+        run: |
+          version=$(jq -r '[.releases[] | select(.app_name == "ae3-gui")][0].app_version' <<< "$PLAN")
+          packaging/macos/bundle-app.sh target/aarch64-apple-darwin/dist/ae3-gui "$version" target/distrib
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-macos-app
+          path: |
+            target/distrib/ae3-gui-aarch64-apple-darwin.zip
+            target/distrib/ae3-gui-aarch64-apple-darwin.zip.sha256
+          if-no-files-found: error
