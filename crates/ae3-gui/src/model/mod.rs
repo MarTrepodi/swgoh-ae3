@@ -11,6 +11,7 @@ pub mod extract;
 pub mod jobs;
 pub mod lru;
 pub mod mesh;
+pub mod names;
 pub mod playback;
 pub mod preview;
 pub mod release;
@@ -20,14 +21,16 @@ pub mod table;
 pub mod update;
 pub mod viewer;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ae3_core::{AssetIndex, AssetVersion, Coverage, DiffFilter, Manifest};
+use ae3_core::{AssetIndex, AssetVersion, Coverage, DiffFilter, Manifest, NameIndex};
 
 use self::diff::DiffRow;
 use self::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use self::jobs::{Job, ProgressClock, format_duration};
+use self::names::{EntityKey, EntityMatch, NamesState};
 use self::preview::Preview;
 use self::selection::{ClickModifiers, RowSelection};
 use self::startup::Startup;
@@ -155,6 +158,17 @@ pub struct Model {
     pub query: String,
     /// Results for `query`; `None` while the query is empty.
     pub search: Option<SearchMatches>,
+    /// The Game Entity of `search` the table is narrowed to, if one was
+    /// picked.
+    pub entity: Option<EntityKey>,
+    /// Whether every matching Game Entity is listed, not just the first few.
+    pub entities_expanded: bool,
+    /// The display names search matches, once loaded.
+    pub names: Option<Arc<NameIndex>>,
+    pub names_state: NamesState,
+    /// Lowercase Package name -> row id, for resolving Game Entities'
+    /// Bundles.
+    row_ids: HashMap<String, usize>,
     /// Row ids shown, in order.
     pub visible: Vec<usize>,
     pub selection: RowSelection,
@@ -186,6 +200,11 @@ impl Model {
         self.version_text = manifest.asset_version.to_string();
         self.update.loaded(manifest.asset_version, now);
         self.rows = PackageRow::from_manifest(&manifest);
+        self.row_ids = self
+            .rows
+            .iter()
+            .map(|r| (r.name.to_lowercase(), r.id))
+            .collect();
         self.manifest = Some(manifest);
         self.selection.clear();
         self.preview = None;
@@ -194,8 +213,8 @@ impl Model {
             old_text: std::mem::take(&mut self.diff.old_text),
             ..DiffState::default()
         };
-        self.search = (!self.query.trim().is_empty())
-            .then(|| SearchMatches::by_name(&self.rows, &self.query));
+        self.search = self.name_search();
+        self.retain_entity();
         self.refresh_visible();
     }
 
@@ -206,8 +225,98 @@ impl Model {
 
     /// Recomputes the shown rows and drops selected rows that are hidden.
     pub fn refresh_visible(&mut self) {
-        self.visible = visible_rows(&self.rows, self.filter, self.search.as_ref(), self.sort);
+        self.visible = visible_rows(
+            &self.rows,
+            self.filter,
+            self.search.as_ref(),
+            self.entity.as_ref(),
+            self.sort,
+        );
         self.selection.retain_visible(&self.visible);
+    }
+
+    /// Matches for `query` from Package names and display names alone,
+    /// or `None` for an empty query.
+    fn name_search(&self) -> Option<SearchMatches> {
+        if self.query.trim().is_empty() {
+            return None;
+        }
+        let mut matches = SearchMatches::by_name(&self.rows, &self.query);
+        matches.entities = self.entity_matches();
+        Some(matches)
+    }
+
+    /// The Game Entities matching `query`, with the Bundles this Manifest
+    /// has.
+    fn entity_matches(&self) -> Vec<EntityMatch> {
+        self.names.as_deref().map_or_else(Vec::new, |names| {
+            EntityMatch::search(names, &self.query, |bundle| {
+                let id = *self.row_ids.get(bundle).or_else(|| {
+                    // Gamedata names are lowercase; any other spelling is
+                    // looked up folded.
+                    self.row_ids.get(&bundle.to_lowercase())
+                })?;
+                self.rows.get(id).map(|r| r.name.as_str())
+            })
+        })
+    }
+
+    /// Drops the picked Game Entity when the matches no longer have it.
+    fn retain_entity(&mut self) {
+        if let Some(key) = &self.entity
+            && self.search.as_ref().and_then(|s| s.entity(key)).is_none()
+        {
+            self.entity = None;
+        }
+    }
+
+    /// The picked Game Entity, as matched.
+    #[must_use]
+    pub fn picked_entity(&self) -> Option<&EntityMatch> {
+        let key = self.entity.as_ref()?;
+        self.search.as_ref()?.entity(key)
+    }
+
+    /// Narrows the table to the Bundles of the matched Game Entity `key`;
+    /// picking the one already picked (or `None`) shows every match again.
+    pub fn pick_entity(&mut self, key: Option<EntityKey>) {
+        let key = key.filter(|k| {
+            self.entity.as_ref() != Some(k)
+                && self.search.as_ref().and_then(|s| s.entity(k)).is_some()
+        });
+        if self.entity != key {
+            self.entity = key;
+            self.refresh_visible();
+        }
+    }
+
+    /// The line beside the search box, while there is a query.
+    #[must_use]
+    pub fn search_status(&self) -> Option<String> {
+        self.search
+            .as_ref()
+            .map(|s| s.status_line(self.picked_entity()))
+    }
+
+    /// The Name Index loaded (or failed to): display names match from now
+    /// on, including for the query already typed.
+    pub fn set_names(&mut self, names: Option<Arc<NameIndex>>, state: NamesState) {
+        self.names_state = state;
+        let same = match (&self.names, &names) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.names = names;
+        let entities = self.entity_matches();
+        if let Some(search) = &mut self.search {
+            search.entities = entities;
+            self.retain_entity();
+            self.refresh_visible();
+        }
     }
 
     /// The search box changed. With an index, the caller runs the search
@@ -215,16 +324,21 @@ impl Model {
     /// then (and without an index) Package names are matched here.
     pub fn set_query(&mut self, query: String) {
         self.query = query;
-        self.search = (!self.query.trim().is_empty())
-            .then(|| SearchMatches::by_name(&self.rows, &self.query));
+        self.search = self.name_search();
+        self.entities_expanded = false;
+        self.retain_entity();
         self.refresh_visible();
         self.sync_highlights();
     }
 
-    /// Search results arrived; ignored if the query has changed since.
-    pub fn apply_search(&mut self, matches: SearchMatches) -> bool {
+    /// Asset Index search results arrived; ignored if the query has
+    /// changed since. The Game Entities already matched are kept.
+    pub fn apply_search(&mut self, mut matches: SearchMatches) -> bool {
         if matches.query != self.query || self.query.trim().is_empty() {
             return false;
+        }
+        if let Some(old) = &mut self.search {
+            matches.entities = std::mem::take(&mut old.entities);
         }
         self.search = Some(matches);
         self.refresh_visible();
@@ -615,5 +729,178 @@ mod tests {
         m.index_job
             .set_paused(generation, true, t0 + Duration::from_secs(10));
         assert!(m.index_label(t0).unwrap().ends_with("paused"));
+    }
+
+    fn name_index() -> Arc<NameIndex> {
+        let entity = |kind, id: &str, name: &str, context: Option<&str>, bundles: &[&str]| {
+            ae3_core::GameEntity {
+                kind,
+                id: id.into(),
+                name: name.into(),
+                context: context.map(Into::into),
+                bundles: bundles.iter().map(|&b| b.into()).collect(),
+            }
+        };
+        Arc::new(NameIndex::new(
+            ae3_core::Language::default(),
+            ae3_core::GamedataVersions::default(),
+            vec![
+                entity(
+                    ae3_core::EntityKind::Unit,
+                    "BOSSK",
+                    "Bossk",
+                    None,
+                    &["charui_bossk", "char_bossk_pre", "relic_rfl_bossk"],
+                ),
+                entity(
+                    ae3_core::EntityKind::Ability,
+                    "specialability_bossk01",
+                    "Bossk's Hunt",
+                    Some("Bossk"),
+                    &["abilityui_bossk"],
+                ),
+                entity(
+                    ae3_core::EntityKind::PlayerPortrait,
+                    "PLAYERPORTRAIT_VADER",
+                    "Sith Lord",
+                    None,
+                    &["charui_vader"],
+                ),
+            ],
+        ))
+    }
+
+    fn ready() -> NamesState {
+        NamesState::Ready {
+            entities: 3,
+            status: ae3_core::NameIndexStatus::Current,
+            problem: None,
+            checking: false,
+        }
+    }
+
+    fn unit_bossk() -> EntityKey {
+        EntityKey {
+            kind: ae3_core::EntityKind::Unit,
+            id: "BOSSK".into(),
+        }
+    }
+
+    /// Display names match only Game Entities; their Bundles are the ones
+    /// this Manifest has, whatever their names.
+    #[test]
+    fn display_names_list_game_entities() {
+        let mut m = model();
+        m.set_names(Some(name_index()), ready());
+        m.set_query("sith".into());
+        let search = m.search.as_ref().unwrap();
+        assert_eq!(search.entities.len(), 1);
+        assert_eq!(search.entities[0].name, "Sith Lord");
+        assert_eq!(search.entities[0].bundles, ["charui_vader"]);
+        // No Bundle's name contains "sith", so nothing is shown until the
+        // entity is picked.
+        assert_eq!(m.visible, Vec::<usize>::new());
+        assert_eq!(
+            m.search_status().unwrap(),
+            "1 Game Entity · 0 Bundles contain 'sith'; 3 Bundles not indexed yet match by name only"
+        );
+
+        m.set_query("bossk".into());
+        let entities = &m.search.as_ref().unwrap().entities;
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0].bundles, ["charui_bossk", "relic_rfl_bossk"]);
+        assert!(entities[1].bundles.is_empty(), "abilityui_bossk is absent");
+    }
+
+    #[test]
+    fn picking_an_entity_filters_to_its_bundles() {
+        let mut m = model();
+        m.set_names(Some(name_index()), ready());
+        m.set_query("sith".into());
+        m.click_row(1, ClickModifiers::NONE);
+        m.pick_entity(Some(EntityKey {
+            kind: ae3_core::EntityKind::PlayerPortrait,
+            id: "PLAYERPORTRAIT_VADER".into(),
+        }));
+        assert_eq!(m.visible, [1]);
+        assert_eq!(
+            m.search_status().unwrap(),
+            "Showing the Bundle of Player Portrait 'Sith Lord'"
+        );
+        assert_eq!(
+            m.request_all(),
+            Some(ExtractRequest::Packages(vec!["charui_vader".into()]))
+        );
+        // Picking it again shows the query's matches again.
+        m.pick_entity(m.entity.clone());
+        assert!(m.entity.is_none());
+        assert_eq!(m.visible, Vec::<usize>::new());
+        assert!(m.selection.is_empty(), "hidden rows are deselected");
+
+        // A key the matches do not have is not picked.
+        m.pick_entity(Some(unit_bossk()));
+        assert!(m.entity.is_none());
+
+        m.set_query("bossk".into());
+        m.pick_entity(Some(unit_bossk()));
+        assert_eq!(m.visible, [0, 3]);
+        assert_eq!(
+            m.search_status().unwrap(),
+            "Showing the 2 Bundles of Unit 'Bossk'"
+        );
+        // Typing on keeps the pick while the entity still matches...
+        m.set_query("boss".into());
+        assert_eq!(m.entity, Some(unit_bossk()));
+        // ...and drops it once it does not.
+        m.set_query("vader".into());
+        assert!(m.entity.is_none());
+        assert_eq!(m.visible, [1]);
+        m.set_query(String::new());
+        assert!(m.entity.is_none());
+        assert_eq!(m.visible.len(), 4);
+    }
+
+    /// Asset Index results replace the Package matches but keep the Game
+    /// Entities and the pick.
+    #[test]
+    fn index_results_keep_the_picked_entity() {
+        let mut m = model();
+        m.set_names(Some(name_index()), ready());
+        m.set_query("bossk".into());
+        m.pick_entity(Some(unit_bossk()));
+        let mut fresh = SearchMatches::by_name(&m.rows, "bossk");
+        fresh.packages.insert("charui_vader".into(), vec![7]);
+        assert!(m.apply_search(fresh));
+        assert_eq!(m.search.as_ref().unwrap().entities.len(), 2);
+        assert_eq!(m.visible, [0, 3]);
+        m.pick_entity(None);
+        assert_eq!(m.visible, [0, 1, 3]);
+    }
+
+    /// The Name Index loads in the background: a query typed before it
+    /// arrived gains its Game Entities when it does.
+    #[test]
+    fn names_arriving_late_fill_the_current_search() {
+        let mut m = model();
+        m.set_query("sith".into());
+        assert_eq!(m.search.as_ref().unwrap().entities, []);
+        assert_eq!(
+            m.search_status().unwrap(),
+            "0 Bundles contain 'sith'; 3 Bundles not indexed yet match by name only"
+        );
+        let names = name_index();
+        m.set_names(Some(Arc::clone(&names)), NamesState::default());
+        assert_eq!(m.search.as_ref().unwrap().entities.len(), 1);
+        m.pick_entity(m.search.as_ref().unwrap().entities[0].key().into());
+        assert_eq!(m.visible, [1]);
+        // The same index again (an update found it current) changes
+        // nothing but the state.
+        m.set_names(Some(names), ready());
+        assert_eq!(m.names_state, ready());
+        assert_eq!(m.visible, [1]);
+        // A new Manifest keeps the query and its Game Entities.
+        m.set_manifest(manifest(), Instant::now());
+        assert_eq!(m.search.as_ref().unwrap().entities.len(), 1);
+        assert_eq!(m.visible, [1]);
     }
 }

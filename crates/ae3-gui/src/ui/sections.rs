@@ -8,9 +8,10 @@ use ae3_core::Platform;
 use ae3_core::config::{AudioFormat, ImageFormat, Layout, MeshFormat, StructuredMode};
 use eframe::egui::{self, RichText};
 
-use super::{error_label, warn_label};
+use super::{entity_glyph, error_label, warn_label};
 use crate::app::{Ae3App, SettingChange};
 use crate::model::jobs::JobPhase;
+use crate::model::names::{EntityMatch, NamesState};
 
 const SECTION_WIDTH: f32 = 96.0;
 
@@ -294,7 +295,14 @@ fn layout_label(l: Layout) -> &'static str {
     }
 }
 
-/// The search box, its status line, and the Asset Index build progress.
+/// How many matching Game Entities are listed before "N more".
+const ENTITIES_SHOWN: usize = 8;
+/// How many are listed at most once expanded; a query matching more is
+/// better refined than scrolled.
+const ENTITIES_MAX: usize = 200;
+
+/// The search box, its status line, the matching Game Entities, and the
+/// Asset Index build progress.
 pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         heading(ui, "Asset Search");
@@ -303,7 +311,7 @@ pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
             app.model.manifest.is_some(),
             egui::TextEdit::singleline(&mut query)
                 .desired_width(260.0)
-                .hint_text("Asset or Bundle name"),
+                .hint_text("Asset, Bundle or display name"),
         );
         if edit.changed() {
             app.set_query(query);
@@ -311,8 +319,9 @@ pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
         if !app.model.query.is_empty() && ui.small_button("×").on_hover_text("Clear").clicked() {
             app.set_query(String::new());
         }
-        if let Some(search) = &app.model.search {
-            ui.label(search.status_line());
+        let searching = app.model.search.is_some();
+        if let Some(status) = app.model.search_status() {
+            ui.label(status);
         } else if let Some(c) = &app.model.coverage {
             let mut text = format!(
                 "Asset Index: {} of {} Bundles indexed",
@@ -323,8 +332,108 @@ pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
             }
             ui.label(RichText::new(text).weak());
         }
+        // How the display names stand: always when there is a problem or
+        // they are still loading, otherwise beside the coverage.
+        if let Some((line, warning)) = app.model.names_state.line() {
+            let loading = matches!(app.model.names_state, NamesState::Loading { .. });
+            if warning {
+                ui.separator();
+                warn_label(ui, line);
+            } else if loading || (!searching && app.model.manifest.is_some()) {
+                ui.separator();
+                ui.label(RichText::new(line).weak());
+            }
+        }
     });
+    entities(app, ui);
     index_progress(app, ui);
+}
+
+fn entity_tooltip(entity: &EntityMatch) -> String {
+    let mut text = format!("{} · {}", entity.kind.label(), entity.id);
+    if entity.bundles.is_empty() {
+        text.push_str("\nNo linked Bundle in this Manifest");
+    } else {
+        for bundle in &entity.bundles {
+            let _ = write!(text, "\n{bundle}");
+        }
+        text.push_str("\n\nClick to show only these Bundles; click again for every match.");
+    }
+    text
+}
+
+/// The Game Entities whose display names match, as buttons that narrow the
+/// Bundles table to their Bundles.
+fn entities(app: &mut Ae3App, ui: &mut egui::Ui) {
+    let Some(search) = &app.model.search else {
+        return;
+    };
+    let total = search.entities.len();
+    if total == 0 {
+        return;
+    }
+    let expanded = app.model.entities_expanded;
+    let shown = total.min(if expanded {
+        ENTITIES_MAX
+    } else {
+        ENTITIES_SHOWN
+    });
+    let picked_key = app.model.entity.as_ref();
+    let mut picked = None;
+    let mut toggle_expanded = false;
+    let mut list = |ui: &mut egui::Ui| {
+        ui.horizontal_wrapped(|ui| {
+            for entity in &search.entities[..shown] {
+                let on = picked_key.is_some_and(|k| entity.is(k));
+                let n = entity.bundles.len();
+                let text = format!("{} {} · {n}", entity_glyph(entity.kind), entity.label());
+                let response = ui
+                    .add_enabled(n > 0, egui::Button::selectable(on, text))
+                    .on_hover_ui(|ui| {
+                        ui.label(entity_tooltip(entity));
+                    })
+                    .on_disabled_hover_ui(|ui| {
+                        ui.label(entity_tooltip(entity));
+                    });
+                if response.clicked() {
+                    picked = Some(entity.key());
+                }
+            }
+            if expanded && total > shown {
+                ui.label(
+                    RichText::new(format!("and {} more; type more to narrow", total - shown))
+                        .weak(),
+                );
+            }
+            if total > ENTITIES_SHOWN {
+                let label = if expanded {
+                    "Fewer".to_owned()
+                } else {
+                    format!("{} more…", total - ENTITIES_SHOWN)
+                };
+                if ui.small_button(label).clicked() {
+                    toggle_expanded = true;
+                }
+            }
+        });
+    };
+    ui.horizontal(|ui| {
+        ui.add_space(SECTION_WIDTH + ui.spacing().item_spacing.x);
+        if expanded {
+            egui::ScrollArea::vertical()
+                .id_salt("entities")
+                .max_height(132.0)
+                .show(ui, |ui| list(ui));
+        } else {
+            list(ui);
+        }
+    });
+    if toggle_expanded {
+        app.model.entities_expanded = !expanded;
+    }
+    if picked.is_some() {
+        app.model.pick_entity(picked);
+    }
 }
 
 fn index_progress(app: &mut Ae3App, ui: &mut egui::Ui) {

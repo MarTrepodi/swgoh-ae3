@@ -16,8 +16,9 @@ use ae3_core::http::{Transport, UreqTransport};
 use ae3_core::version::CDN_ROOT;
 use ae3_core::{
     AssetIndex, AssetInfo, AssetKind, AssetKinds, AssetVersion, Atlas, CdnLocation, Config, Diff,
-    Environment, ExportOptions, IndexBuilder, IndexProgress, LoadedAudioPackage, LoadedBundle,
-    PackageCache, PackageKind, PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
+    Environment, ExportOptions, IndexBuilder, IndexProgress, Language, LoadedAudioPackage,
+    LoadedBundle, NameIndex, NameIndexLoad, NameIndexStatus, NamesEvent, PackageCache, PackageKind,
+    PackageStore, Platform, Resolver, SoundInfo, Value, VersionSource,
 };
 use eframe::egui::ColorImage;
 
@@ -25,6 +26,7 @@ use crate::model::IndexProgressView;
 use crate::model::extract::{ExtractProgress, ExtractRequest, ExtractSummary};
 use crate::model::jobs::{Generation, Throttle};
 use crate::model::mesh::MeshPreview;
+use crate::model::names::NamesState;
 use crate::model::playback::{SoundRef, unplayable_clip};
 use crate::model::preview::THUMBNAIL_PX;
 use crate::model::release::{self, ReleaseState};
@@ -240,6 +242,13 @@ pub enum Msg {
     ConfigSaved(Result<(), String>),
     /// What the "AE3 vX available" check knows.
     ReleaseChecked(ReleaseState),
+    /// What the Name Index load is doing.
+    NamesProgress(String),
+    /// The Name Index as loaded, and how it came to be.
+    NamesLoaded {
+        index: Option<Arc<NameIndex>>,
+        state: NamesState,
+    },
 }
 
 pub type Mailbox = Outbox<Msg>;
@@ -713,6 +722,70 @@ pub fn diff(
     Ok((Arc::new(diff), new_store))
 }
 
+/// Loads the Name Index for `language` from the cache under `cache_root`:
+/// the cached copy first, so display names match at once, then the copy
+/// brought up to date with the community gamedata mirror. An update
+/// downloads about 25 MB, so this runs on a thread of its own. It never
+/// fails: a problem (or a panic while parsing the gamedata) is reported in
+/// the final [`Msg::NamesLoaded`].
+pub fn load_names<T: Transport + ?Sized>(
+    transport: &T,
+    cache_root: &Path,
+    language: Language,
+    outbox: &Mailbox,
+) {
+    let open = |update: bool, on_event: &mut dyn FnMut(NamesEvent<'_>)| {
+        ae3_core::guard::catch_panic(|| {
+            NameIndex::open(transport, cache_root, language, update, on_event)
+        })
+        .unwrap_or_else(|panic| NameIndexLoad {
+            index: None,
+            status: NameIndexStatus::Unavailable,
+            problem: Some(format!("the Name Index could not be read: {panic}")),
+            path: ae3_core::names::default_name_index_path(cache_root, language),
+        })
+    };
+    let cached = open(false, &mut |_| {});
+    let shown = cached
+        .index
+        .is_some()
+        .then(|| NamesState::from_load(&cached, true));
+    let fallback = cached.index.map(Arc::new);
+    if let Some(state) = shown {
+        outbox.send(Msg::NamesLoaded {
+            index: fallback.clone(),
+            state,
+        });
+    }
+    let mut load = open(true, &mut |event| {
+        let step = match event {
+            NamesEvent::Building { versions } => format!(
+                "Building display names from gamedata {}…",
+                short_version(&versions.gamedata)
+            ),
+            NamesEvent::Downloading { file } => format!("Downloading display names: {file}…"),
+            _ => return,
+        };
+        outbox.send(Msg::NamesProgress(step));
+    });
+    let index = match load.index.take() {
+        Some(index) => Some(Arc::new(index)),
+        // A panic during the update must not take away the copy shown.
+        None if fallback.is_some() => {
+            load.status = NameIndexStatus::Stale;
+            fallback
+        }
+        None => None,
+    };
+    let state = NamesState::new(index.as_deref(), load.status, load.problem, false);
+    outbox.send(Msg::NamesLoaded { index, state });
+}
+
+/// A gamedata version without its hash: `0.40.6:i9YY…` -> `0.40.6`.
+fn short_version(version: &str) -> &str {
+    version.split(':').next().unwrap_or(version)
+}
+
 /// The "AE3 vX available" check: reads the saved state at `path`, asks
 /// GitHub for the latest release when a day has passed since the last
 /// check, and saves the outcome. Failures (a 404 while the repository is
@@ -1079,6 +1152,122 @@ mod tests {
         let state = check_release(&UreqTransport::new(), None, unix_now());
         assert!(state.checked_at.is_some());
         eprintln!("latest release: {:?}", state.latest);
+    }
+
+    /// No network at all.
+    struct Offline;
+
+    impl Transport for Offline {
+        fn get_bytes(&self, url: &str) -> Result<Vec<u8>, ae3_core::http::HttpError> {
+            Err(ae3_core::http::HttpError::Transport {
+                url: url.to_owned(),
+                message: "offline".to_owned(),
+            })
+        }
+
+        fn get_range(
+            &self,
+            url: &str,
+            _start: u64,
+            _end_inclusive: u64,
+        ) -> Result<ae3_core::http::RangeResponse, ae3_core::http::HttpError> {
+            self.get_bytes(url).map(|_| unreachable!())
+        }
+
+        fn exists(&self, url: &str) -> Result<bool, ae3_core::http::HttpError> {
+            self.get_bytes(url).map(|_| true)
+        }
+    }
+
+    /// Offline, a cached Name Index is shown at once and kept; with none
+    /// cached, display names are reported unavailable. Either way the load
+    /// ends with one final message.
+    #[test]
+    fn name_index_loads_from_the_cache_and_survives_offline() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let language = Language::default();
+        let collect = || {
+            let (outbox, rx) = Outbox::new(|| {});
+            load_names(&Offline, &dir, language, &outbox);
+            rx.try_iter()
+                .filter_map(|msg| match msg {
+                    Msg::NamesLoaded { index, state } => Some((index.map(|i| i.len()), state)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let none = collect();
+        assert_eq!(none.len(), 1);
+        assert_eq!(none[0].0, None);
+        assert!(matches!(none[0].1, NamesState::Unavailable { .. }));
+
+        let entity = ae3_core::GameEntity {
+            kind: ae3_core::EntityKind::Unit,
+            id: "BOSSK".into(),
+            name: "Bossk".into(),
+            context: None,
+            bundles: vec!["charui_bossk".into()],
+        };
+        NameIndex::new(
+            language,
+            ae3_core::GamedataVersions::default(),
+            vec![entity],
+        )
+        .save(&ae3_core::names::default_name_index_path(&dir, language))
+        .unwrap();
+        let cached = collect();
+        assert_eq!(cached.len(), 2, "the cached copy, then the update");
+        assert_eq!(cached[0].0, Some(1));
+        assert!(matches!(
+            cached[0].1,
+            NamesState::Ready {
+                status: NameIndexStatus::Unchecked,
+                checking: true,
+                ..
+            }
+        ));
+        assert_eq!(cached[1].0, Some(1));
+        assert!(matches!(
+            &cached[1].1,
+            NamesState::Ready {
+                status: NameIndexStatus::Stale,
+                problem: Some(_),
+                checking: false,
+                ..
+            }
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Builds the Name Index from the real gamedata mirror and finds Bossk.
+    #[test]
+    #[ignore = "needs the network"]
+    fn live_name_index_finds_bossk() {
+        let dir = std::env::temp_dir().join(format!("ae3-gui-live-names-{}", std::process::id()));
+        let (outbox, rx) = Outbox::new(|| {});
+        load_names(&UreqTransport::new(), &dir, Language::default(), &outbox);
+        let mut steps = 0;
+        let mut last = None;
+        for msg in rx.try_iter() {
+            match msg {
+                Msg::NamesProgress(_) => steps += 1,
+                Msg::NamesLoaded { index, state } => last = Some((index, state)),
+                _ => {}
+            }
+        }
+        let (index, state) = last.expect("a final message");
+        eprintln!("{steps} progress steps; {state:?}");
+        let index = index.expect("an index");
+        let names: Vec<_> = index
+            .search("bossk")
+            .iter()
+            .map(|m| m.entity.name.clone())
+            .collect();
+        eprintln!("bossk: {names:?}");
+        assert!(names.iter().any(|n| n == "Bossk"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
