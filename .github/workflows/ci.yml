@@ -112,3 +112,19 @@ jobs:
         run: |
           cargo test --workspace --exclude ae3-oracle --all-features --locked
           cargo test -p ae3-oracle --locked
+
+  # The single check branch protection requires. It passes when every job
+  # above passed or was skipped (documentation-only pull requests).
+  result:
+    name: CI result
+    if: always()
+    needs: [changes, commits, fmt, check]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          if [[ "$FAILED" == "true" ]]; then
+            echo "::error::A CI job failed or was cancelled."
+            exit 1
+          fi

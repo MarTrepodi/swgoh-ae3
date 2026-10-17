@@ -185,3 +185,22 @@ jobs:
 
       - name: Oracle
         run: cargo test -p ae3-oracle --all-features --locked -- --include-ignored --nocapture
+
+  # The single check branch protection requires. Skipped jobs pass it, so
+  # ordinary pull requests are not held; on release-plz's release pull
+  # request and full-ci pull requests every platform must pass. Requiring the
+  # matrix jobs directly would not work: when skipped, they report under
+  # their unexpanded name and the required check would never arrive.
+  result:
+    name: Full CI result
+    if: always()
+    needs: [gate, build, oracle]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          if [[ "$FAILED" == "true" ]]; then
+            echo "::error::A full CI job failed or was cancelled."
+            exit 1
+          fi
