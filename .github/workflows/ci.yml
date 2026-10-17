@@ -15,6 +15,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Fixture tests read the game data fetched by scripts/fetch-fixtures.sh
+  # from here; after the fetch, a missing fixture fails instead of skipping.
+  AE3_FIXTURES: ${{ github.workspace }}/fixtures
+  AE3_REQUIRE_FIXTURES: "1"
 
 jobs:
   fmt:
@@ -42,18 +46,44 @@ jobs:
             os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
     steps:
+      # Keep LF endings so scripts/fetch-fixtures.sh runs under Git Bash.
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
 
+      # Fixtures are game data and never committed. The cache key is the
+      # script itself, which holds the pinned list and its checksums; the
+      # script re-verifies every file, so a hit costs only the hashing.
+      - name: Cache fixtures
+        uses: actions/cache@v4
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        shell: bash
+        run: bash scripts/fetch-fixtures.sh
+
+      # ae3-oracle's `oracle` feature links C zstd through unity-rs-core, so
+      # --all-features leaves that crate out here; its default-feature tests
+      # (the per-format fixture checks) still run, and the oracle job below
+      # runs the rest. Bash, so the first command's failure is not lost on
+      # Windows, where PowerShell would only report the last one.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
+          cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-features --locked
+        shell: bash
+        run: |
+          cargo test --workspace --exclude ae3-oracle --all-features --locked
+          cargo test -p ae3-oracle --locked
 
       - name: Release build
-        run: cargo build --workspace --release --locked
+        run: cargo build --workspace --exclude ae3-oracle --release --locked
 
       # Budgets are in MiB and apply to the default-feature release binaries.
       - name: Binary size budget
@@ -77,3 +107,36 @@ jobs:
           check ae3 5
           check ae3-gui 8
           exit $status
+
+  # The differential oracle (ADR-0006): every fixture texture decoded by
+  # ae3-core and by unity-rs-core must agree. unity-rs-core links C zstd,
+  # which is why it lives in this job and never in a shipped binary.
+  oracle:
+    name: Texture oracle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache fixtures
+        uses: actions/cache@v4
+        with:
+          path: fixtures
+          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
+      - name: Fetch fixtures
+        run: bash scripts/fetch-fixtures.sh
+
+      - name: Shipped binaries do not depend on the oracle
+        run: |
+          for dep in unity-rs-core zstd-sys; do
+            if cargo tree --locked -p ae3 -p ae3-gui --all-features --target all -e normal,build -i "$dep" >/dev/null 2>&1; then
+              echo "::error::ae3 or ae3-gui depends on $dep"
+              exit 1
+            fi
+          done
+
+      - name: Clippy
+        run: cargo clippy -p ae3-oracle --all-targets --all-features --locked -- -D warnings
+
+      - name: Oracle
+        run: cargo test -p ae3-oracle --all-features --locked -- --include-ignored --nocapture
