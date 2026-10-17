@@ -20,5 +20,10 @@ thiserror.workspace = true
 toml = { version = "1.1", default-features = false, features = ["std", "serde", "parse", "display"] }
 ureq.workspace = true
 
+[dev-dependencies]
+# Only to parse and validate the glb files the tests write; never linked
+# into the binaries.
+gltf = { version = "1.4", default-features = false, features = ["names", "utils"] }
+
 [lints]
 workspace = true
