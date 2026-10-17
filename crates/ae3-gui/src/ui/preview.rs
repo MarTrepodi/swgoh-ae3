@@ -242,10 +242,14 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
             visuals.weak_text_color(),
         );
     }
-    // The checkbox sits on top of the cell and takes its own clicks.
+    // The checkbox sits on top of the cell and takes its own clicks. It
+    // goes in a child Ui so it does not move the row's cursor: `ui.put`
+    // would advance the cursor to just after the checkbox, and the next
+    // cell would then be drawn over this one.
     let check_rect = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(18.0, 18.0));
     if ui
-        .put(check_rect, egui::Checkbox::without_text(&mut checked))
+        .new_child(egui::UiBuilder::new().max_rect(check_rect))
+        .add(egui::Checkbox::without_text(&mut checked))
         .changed()
         && let Some(preview) = &mut app.model.preview
     {

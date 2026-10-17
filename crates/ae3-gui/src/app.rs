@@ -1008,4 +1008,62 @@ mod tests {
         app.model.tab = crate::model::Tab::Diff;
         frame(&ctx, &mut app);
     }
+
+    /// Cells in a preview row sit side by side. Each cell's checkbox is
+    /// placed with `ui.put`, which used to pull the row's cursor back to
+    /// the checkbox, so the next cell was drawn almost on top of this one.
+    #[test]
+    fn preview_cells_do_not_overlap() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let names: Vec<String> = (0..6).map(|i| format!("cell_asset_{i}")).collect();
+        let assets = names
+            .iter()
+            .zip(1_i64..)
+            .map(|(name, path_id)| AssetInfo {
+                path_id,
+                name: name.clone(),
+                class_name: "Material".into(),
+                script_class: None,
+                kind: AssetKind::Structured,
+                byte_size: 100,
+                texture: None,
+                sprite_count: None,
+                container_path: None,
+            })
+            .collect();
+        let mut preview = crate::model::preview::Preview::new(0, "test_bundle".into());
+        preview.set_assets(assets);
+        app.model.preview = Some(preview);
+
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1600.0, 900.0))),
+            ..RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| crate::ui::show(&mut app, ui));
+        output.textures_delta.clear();
+
+        // Where each cell's name label was painted.
+        let mut labels: Vec<(String, egui::Pos2)> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if names.contains(&text.galley.text().to_owned()) => {
+                    Some((text.galley.text().to_owned(), text.pos))
+                }
+                _ => None,
+            })
+            .collect();
+        labels.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(labels.len(), names.len(), "every cell label is painted");
+        for (i, (a, pa)) in labels.iter().enumerate() {
+            for (b, pb) in &labels[i + 1..] {
+                let same_row = (pa.y - pb.y).abs() < 1.0;
+                assert!(
+                    !same_row || (pa.x - pb.x).abs() >= 124.0,
+                    "{a} at {pa:?} overlaps {b} at {pb:?}"
+                );
+            }
+        }
+    }
 }
