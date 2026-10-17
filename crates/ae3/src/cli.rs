@@ -213,6 +213,10 @@ pub struct ExportArgs {
     /// Restore the transparent padding of Sprites (the default).
     #[arg(long, overrides_with = "no_padding_restoration")]
     pub padding_restoration: bool,
+    /// How whole-Bundle exports write Structured Assets, the game's data
+    /// objects [default: combined].
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub structured: Option<StructuredMode>,
 }
 
 /// How extracted files are arranged under `--output`.
@@ -222,6 +226,27 @@ pub enum Layout {
     Ae3,
     /// swgoh-ae2's `{output}/{category}/`
     Ae2,
+}
+
+/// How whole-Bundle exports write Structured Assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum StructuredMode {
+    /// One JSON file per Asset.
+    Separate,
+    /// One {bundle}.structured.json per Bundle, keyed by Asset.
+    Combined,
+    /// Not written.
+    None,
+}
+
+impl From<StructuredMode> for config::StructuredMode {
+    fn from(mode: StructuredMode) -> Self {
+        match mode {
+            StructuredMode::Separate => Self::Separate,
+            StructuredMode::Combined => Self::Combined,
+            StructuredMode::None => Self::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -351,6 +376,7 @@ impl Cli {
             settings.atlas_cutting = tri_state(export.atlas_cutting, export.no_atlas_cutting);
             settings.padding_restoration =
                 tri_state(export.padding_restoration, export.no_padding_restoration);
+            settings.structured = export.structured.map(config::StructuredMode::from);
         }
         settings
     }
@@ -583,7 +609,8 @@ mod tests {
 
         let cli = parse(
             "ae3 extract a --platform android -o out --no-cache --parallel 3 --layout ae2 \
-             --image-format webp --audio-format raw --skip-existing --no-atlas-cutting",
+             --image-format webp --audio-format raw --skip-existing --no-atlas-cutting \
+             --structured separate",
         )
         .unwrap();
         let s = cli.settings();
@@ -597,6 +624,12 @@ mod tests {
         assert_eq!(s.skip_existing, Some(true));
         assert_eq!(s.atlas_cutting, Some(false));
         assert_eq!(s.padding_restoration, None);
+        assert_eq!(s.structured, Some(config::StructuredMode::Separate));
+        let s = parse("ae3 diff 1 --extract all --structured none")
+            .unwrap()
+            .settings();
+        assert_eq!(s.structured, Some(config::StructuredMode::None));
+        assert!(parse("ae3 extract a --structured merged").is_err());
     }
 
     #[test]

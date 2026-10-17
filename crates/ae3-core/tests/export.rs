@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ae3_core::config::{AudioFormat, ImageFormat, Layout};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, StructuredMode};
 use ae3_core::http::{HttpError, RangeResponse, Transport};
 use ae3_core::{
     AssetKind, AssetVersion, CdnLocation, Downloader, Environment, ExportEvent, ExportOptions,
@@ -310,14 +310,22 @@ fn cuts_an_atlas_into_its_sprites() {
         "unit_details_atlas/active_prereq_default.png"
     );
     assert_eq!(json["texture"]["width"], 1024);
-    // The atlas texture itself, the Material as JSON, the Sprites and the
-    // Atlas JSON.
+    // The atlas texture itself, the Material in the combined Structured
+    // Assets file, the Sprites and the Atlas JSON.
     assert!(
         f.out("unit/unit_details_atlas/unit_details_atlas.png")
             .exists()
     );
+    let combined: serde_json::Value = serde_json::from_slice(
+        &fs::read(f.out("unit/unit_details_atlas/unit_details_atlas.structured.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        combined["unit_details_atlas"]["class_name"], "Material",
+        "{combined:#}"
+    );
     assert!(
-        f.out("unit/unit_details_atlas/unit_details_atlas.json")
+        !f.out("unit/unit_details_atlas/unit_details_atlas.json")
             .exists()
     );
     assert_eq!(report.written.len(), 39 + 3);
@@ -361,6 +369,7 @@ fn colliding_names_get_a_path_id_suffix() {
     // unit_details_atlas, are written as JSON.
     let options = ExportOptions {
         atlas_cutting: false,
+        structured: StructuredMode::Separate,
         ..f.options()
     };
     let report = export(&f, &packages(&["unit_details_atlas"]), &options);
@@ -379,6 +388,158 @@ fn colliding_names_get_a_path_id_suffix() {
     let again = export(&f, &packages(&["unit_details_atlas"]), &options);
     let paths = |r: &ExportReport| r.written.iter().map(|w| w.path.clone()).collect::<Vec<_>>();
     assert_eq!(paths(&report), paths(&again));
+}
+
+#[test]
+fn combined_structured_keys_match_separate_file_stems() {
+    let needed = ["unit_details_atlas.bundle", "shared_uicontainer.bundle"];
+    let Some(f) = fixture("combined-keys", &needed) else {
+        return;
+    };
+    // The uncut Atlas keeps its own JSON file and the plain name, so the
+    // Material, also named unit_details_atlas, is keyed with its path id.
+    let options = ExportOptions {
+        atlas_cutting: false,
+        ..f.options()
+    };
+    let report = export(&f, &packages(&["unit_details_atlas"]), &options);
+    let dir = f.out("unit/unit_details_atlas");
+    let atlas: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join("unit_details_atlas.json")).unwrap()).unwrap();
+    assert!(atlas.get("mSprites").is_some());
+    let combined_path = dir.join("unit_details_atlas.structured.json");
+    let combined: serde_json::Value =
+        serde_json::from_slice(&fs::read(&combined_path).unwrap()).unwrap();
+    let material = &combined["unit_details_atlas_-8126108850209264937"];
+    assert_eq!(material["path_id"], -8_126_108_850_209_264_937_i64);
+    assert_eq!(material["name"], "unit_details_atlas");
+    assert_eq!(material["class_name"], "Material");
+    assert!(material["data"].get("m_SavedProperties").is_some());
+    assert!(
+        !dir.join("unit_details_atlas_-8126108850209264937.json")
+            .exists()
+    );
+    let written = report
+        .written
+        .iter()
+        .find(|w| w.path == combined_path)
+        .expect("the combined file is reported");
+    assert_eq!(written.asset, "unit_details_atlas.structured.json");
+    assert_eq!(written.bytes, fs::metadata(&combined_path).unwrap().len());
+    assert_eq!(written.note.as_deref(), Some("1 Structured Asset combined"));
+    assert!(fs::read_dir(&dir).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".ae3-part")
+    }));
+}
+
+#[test]
+fn structured_modes_hold_the_same_data() {
+    let bundle = "conquest_progress_ladder_view";
+    let Some(f) = fixture(
+        "structured-modes",
+        &["conquest_progress_ladder_view.bundle"],
+    ) else {
+        return;
+    };
+    let with = |structured| ExportOptions {
+        structured,
+        ..f.options()
+    };
+    let dir = f.out(&format!("conquest/{bundle}"));
+    let combined_path = dir.join(format!("{bundle}.structured.json"));
+    let json_files = || -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+            .map(|d| {
+                d.map(|e| e.unwrap().path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
+    };
+
+    let view = f.store.open_bundle(bundle).unwrap();
+    let structured = view
+        .assets()
+        .unwrap()
+        .iter()
+        .filter(|a| a.kind == AssetKind::Structured)
+        .count();
+    assert!(structured > 1, "the fixture has several Structured Assets");
+
+    let separate = export(&f, &packages(&[bundle]), &with(StructuredMode::Separate));
+    let separate_files = json_files();
+    assert!(!combined_path.exists());
+    fs::remove_dir_all(&dir).unwrap();
+
+    // Reference Atlases keep their own JSON files in every mode.
+    let none = export(&f, &packages(&[bundle]), &with(StructuredMode::None));
+    let atlas_files = json_files();
+    let structured_files: Vec<&PathBuf> = separate_files
+        .iter()
+        .filter(|p| !atlas_files.contains(p))
+        .collect();
+    assert_eq!(structured_files.len(), structured, "{separate_files:?}");
+    assert_eq!(none.ignored, separate.ignored + structured);
+    assert_eq!(none.written.len() + structured, separate.written.len());
+    let _ = fs::remove_dir_all(&dir);
+
+    let combined = export(&f, &packages(&[bundle]), &with(StructuredMode::Combined));
+    let mut expected_files = atlas_files.clone();
+    expected_files.push(combined_path.clone());
+    expected_files.sort();
+    assert_eq!(json_files(), expected_files);
+    assert_eq!(combined.written.len(), none.written.len() + 1);
+    let object: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&fs::read(&combined_path).unwrap()).unwrap();
+    assert_eq!(object.len(), structured);
+    for file in &structured_files {
+        let key = file.file_stem().unwrap().to_string_lossy();
+        let entry = object
+            .get(key.as_ref())
+            .unwrap_or_else(|| panic!("{key} missing"));
+        let path_id = entry["path_id"].as_i64().unwrap();
+        // The same JSON `separate` wrote to the file.
+        let expected: serde_json::Value =
+            serde_json::from_str(&view.structured_json(path_id).unwrap()).unwrap();
+        assert_eq!(entry["data"], expected, "{key}");
+    }
+
+    // Skip-existing skips each combined Asset; picking by path id writes a
+    // Structured Asset to its own file whatever the mode.
+    let skipped = export(
+        &f,
+        &packages(&[bundle]),
+        &ExportOptions {
+            skip_existing: true,
+            ..with(StructuredMode::Combined)
+        },
+    );
+    assert!(skipped.written.is_empty(), "{:#?}", skipped.written);
+    let combined_skips = skipped
+        .skipped
+        .iter()
+        .filter(|s| matches!(&s.reason, SkipReason::Exists { path } if *path == combined_path))
+        .count();
+    assert_eq!(combined_skips, object.len());
+    let first = object.values().next().unwrap()["path_id"].as_i64().unwrap();
+    for mode in [StructuredMode::Combined, StructuredMode::None] {
+        let picked = export(
+            &f,
+            &Selection::Assets {
+                package: bundle.into(),
+                path_ids: vec![first],
+            },
+            &with(mode),
+        );
+        assert_eq!(picked.written.len(), 1, "{mode}");
+        assert_eq!(picked.written[0].path.extension().unwrap(), "json");
+        assert_ne!(picked.written[0].path, combined_path, "{mode}");
+    }
 }
 
 #[test]

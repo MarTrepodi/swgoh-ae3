@@ -23,6 +23,7 @@
 //! audio-format = "ogg"     # ogg | raw
 //! layout = "default"       # default | ae2
 //! skip-existing = false
+//! structured = "combined" # separate | combined | none
 //!
 //! [gui]
 //! last-asset-version = 100054
@@ -161,6 +162,23 @@ choice_enum! {
     }
 }
 
+choice_enum! {
+    /// How whole-Bundle exports write Structured Assets (MonoBehaviours and
+    /// other TypeTree objects that are not Atlases, Textures, Text, Audio or
+    /// Meshes). Assets picked by path id are always written as their own
+    /// files.
+    StructuredMode, "structured mode" {
+        /// One JSON file per Asset, beside the Bundle's other files.
+        Separate => "separate",
+        /// One `{bundle}.structured.json` per Bundle holding every Structured
+        /// Asset, keyed by the file stem `separate` would have used.
+        #[default]
+        Combined => "combined",
+        /// Not written.
+        None => "none",
+    }
+}
+
 /// A number of bytes, written in files and variables as a plain integer or
 /// with a unit: `5GB`, `500 MB`, `1.5GiB`. KB/MB/GB/TB are powers of 1000;
 /// KiB/MiB/GiB/TiB are powers of 1024.
@@ -287,6 +305,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_existing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured: Option<StructuredMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub no_cache: Option<bool>,
 }
 
@@ -303,6 +323,7 @@ pub const ENV_VARS: &[&str] = &[
     "AE3_AUDIO_FORMAT",
     "AE3_LAYOUT",
     "AE3_SKIP_EXISTING",
+    "AE3_STRUCTURED",
     "AE3_NO_CACHE",
 ];
 
@@ -344,6 +365,7 @@ impl Settings {
             audio_format: higher.audio_format.or(self.audio_format),
             layout: higher.layout.or(self.layout),
             skip_existing: higher.skip_existing.or(self.skip_existing),
+            structured: higher.structured.or(self.structured),
             no_cache: higher.no_cache.or(self.no_cache),
         }
     }
@@ -388,6 +410,7 @@ impl Settings {
             audio_format: get(&lookup, "AE3_AUDIO_FORMAT", parsed)?,
             layout: get(&lookup, "AE3_LAYOUT", parsed)?,
             skip_existing: get(&lookup, "AE3_SKIP_EXISTING", parse_bool)?,
+            structured: get(&lookup, "AE3_STRUCTURED", parsed)?,
             no_cache: get(&lookup, "AE3_NO_CACHE", parse_bool)?,
         })
     }
@@ -490,6 +513,8 @@ pub struct Config {
     pub layout: Layout,
     /// Leave existing output files alone instead of overwriting them.
     pub skip_existing: bool,
+    /// How whole-Bundle exports write Structured Assets.
+    pub structured: StructuredMode,
     /// Download into a throwaway directory instead of the cache.
     pub no_cache: bool,
 }
@@ -508,6 +533,7 @@ impl Default for Config {
             audio_format: AudioFormat::default(),
             layout: Layout::default(),
             skip_existing: false,
+            structured: StructuredMode::default(),
             no_cache: false,
         }
     }
@@ -567,6 +593,9 @@ impl Config {
         if let Some(v) = s.skip_existing {
             self.skip_existing = v;
         }
+        if let Some(v) = s.structured {
+            self.structured = v;
+        }
         if let Some(v) = s.no_cache {
             self.no_cache = v;
         }
@@ -618,6 +647,7 @@ mod tests {
         assert_eq!(c.audio_format, AudioFormat::Ogg);
         assert_eq!(c.layout, Layout::Default);
         assert!(!c.skip_existing && !c.no_cache);
+        assert_eq!(c.structured, StructuredMode::Combined);
     }
 
     #[test]
@@ -628,6 +658,7 @@ mod tests {
             image-format = "webp"
             parallel-downloads = 2
             layout = "ae2"
+            structured = "separate"
             "#,
         )
         .unwrap()
@@ -636,6 +667,7 @@ mod tests {
             ("AE3_PLATFORM", "ios"),
             ("AE3_IMAGE_FORMAT", "png"),
             ("AE3_CACHE_CAP", "1GiB"),
+            ("AE3_STRUCTURED", "none"),
         ])
         .unwrap();
         let cli = Settings {
@@ -648,6 +680,7 @@ mod tests {
         assert_eq!(c.cache_cap, 1 << 30, "env over default");
         assert_eq!(c.parallel_downloads, 2, "file over default");
         assert_eq!(c.layout, Layout::Ae2);
+        assert_eq!(c.structured, StructuredMode::None, "env over file");
         assert_eq!(c.audio_format, AudioFormat::Ogg, "default");
     }
 
@@ -661,6 +694,7 @@ mod tests {
             ("AE3_LAYOUT", "ae3"),
             ("AE3_OUTPUT_DIR", "/tmp/out"),
             ("AE3_PADDING_RESTORATION", ""),
+            ("AE3_STRUCTURED", "None"),
         ])
         .unwrap();
         assert_eq!(s.atlas_cutting, Some(false));
@@ -670,6 +704,7 @@ mod tests {
         assert_eq!(s.layout, Some(Layout::Default));
         assert_eq!(s.output_dir, Some(PathBuf::from("/tmp/out")));
         assert_eq!(s.padding_restoration, None, "empty means unset");
+        assert_eq!(s.structured, Some(StructuredMode::None));
 
         for (var, value) in [
             ("AE3_PARALLEL_DOWNLOADS", "0"),
@@ -677,6 +712,7 @@ mod tests {
             ("AE3_PLATFORM", "linux"),
             ("AE3_CACHE_CAP", "lots"),
             ("AE3_IMAGE_FORMAT", "jpeg"),
+            ("AE3_STRUCTURED", "merged"),
         ] {
             let err = env(&[(var, value)]).unwrap_err();
             assert!(
@@ -696,6 +732,7 @@ mod tests {
                 "AE3_IMAGE_FORMAT" => "webp",
                 "AE3_AUDIO_FORMAT" => "raw",
                 "AE3_LAYOUT" => "ae2",
+                "AE3_STRUCTURED" => "separate",
                 "AE3_OUTPUT_DIR" | "AE3_CACHE_DIR" => "/x",
                 _ => "true",
             };
@@ -722,6 +759,7 @@ mod tests {
                 audio_format: Some(AudioFormat::Raw),
                 layout: Some(Layout::Ae2),
                 skip_existing: Some(true),
+                structured: Some(StructuredMode::Separate),
                 no_cache: Some(false),
             },
             gui: GuiState {
@@ -732,6 +770,7 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("cache-cap = \"2GB\""), "{text}");
         assert!(text.contains("platform = \"iOS\""), "{text}");
+        assert!(text.contains("structured = \"separate\""), "{text}");
         assert!(
             text.contains("[gui]\nlast-asset-version = 100054"),
             "{text}"
@@ -783,6 +822,10 @@ mod tests {
         assert_eq!("WebP".parse(), Ok(ImageFormat::Webp));
         assert_eq!("AE2".parse(), Ok(Layout::Ae2));
         assert!("flac".parse::<AudioFormat>().is_err());
+        assert_eq!("COMBINED".parse(), Ok(StructuredMode::Combined));
+        for &m in StructuredMode::ALL {
+            assert_eq!(m.to_string().parse(), Ok(m));
+        }
         for &f in ImageFormat::ALL {
             assert_eq!(f.to_string().parse(), Ok(f));
         }

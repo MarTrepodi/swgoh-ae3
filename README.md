@@ -28,7 +28,7 @@ AE3 replaces three earlier tools: [swgoh-ae2](https://github.com/swgoh-utils/swg
   | Sprite atlases | One image per sprite, plus a JSON file describing each sprite |
   | Meshes | Wavefront OBJ, oriented as swgoh-ae2 wrote them, with normals, UVs and one group per submesh |
   | Audio | Ogg Vorbis, or the original Wwise data |
-  | Structured data | JSON |
+  | Structured data | JSON: by default one `{bundle}.structured.json` per bundle, or one file per asset |
   | Text | Original bytes |
 
 - **Download cache.** A bundle unchanged between game releases is downloaded only once. The cache keeps up to 5 GB by default and drops the least recently used packages first.
@@ -118,7 +118,9 @@ ae3 diff 100052 --category charui --summary
 ae3 cache prune --max 2GB
 ```
 
-`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. `--names-only` matches bundle names without the index, and `--no-update` searches the index as it stands. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting` and `--no-padding-restoration`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
+`ae3 search` updates the asset index first, which reads only the start of each new or changed bundle, and prints each matching bundle with the matching assets and their path ids. `--names-only` matches bundle names without the index, and `--no-update` searches the index as it stands. `ae3 extract` takes package names, or `--category <name>`, `--all` (every bundle) or `--audio` (every audio package). It also takes `--layout ae3|ae2`, `--image-format png|webp`, `--audio-format ogg|raw`, `--skip-existing`, `--no-atlas-cutting`, `--no-padding-restoration` and `--structured combined|separate|none`. With a single bundle, `--path-id` exports only those assets; with a single audio package, `--sound` exports only those sounds.
+
+Structured assets are the MonoBehaviours and other Unity objects that are not images, atlases, meshes, text or audio. A category such as `conquest` holds tens of thousands of them, so by default (`--structured combined`) each bundle's structured assets go into one `{bundle}.structured.json` next to its other files. That file is a JSON object with one member per asset, keyed by the file name the asset would otherwise get (its name, with `_{path id}` added when two assets share a name). Each member holds the asset's `path_id`, `name`, `class_name`, `script_class` and `container_path` when known, and its `data`. `--structured separate` writes one `{asset}.json` per asset instead, as earlier releases did, and `--structured none` skips them. Assets picked with `--path-id` are always written as their own files.
 
 `ae3 diff --category <name>` compares only that category's packages: the counts, sizes, changed share and engine-rebuild flag all describe that category, in text and `--json` output alike.
 
@@ -169,10 +171,11 @@ layout = "ae3"                # ae3 or ae2
 atlas-cutting = true
 padding-restoration = true
 skip-existing = false
+structured = "combined"       # combined, separate or none
 no-cache = false
 ```
 
-Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING` and `AE3_NO_CACHE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
+Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE3_CACHE_DIR`, `AE3_CACHE_CAP`, `AE3_PARALLEL_DOWNLOADS`, `AE3_IMAGE_FORMAT`, `AE3_AUDIO_FORMAT`, `AE3_LAYOUT`, `AE3_ATLAS_CUTTING`, `AE3_PADDING_RESTORATION`, `AE3_SKIP_EXISTING`, `AE3_STRUCTURED` and `AE3_NO_CACHE`. When the same setting is given more than once, command-line flags win over `AE3_*` environment variables, which win over the file.
 
 ## Building from source
 
