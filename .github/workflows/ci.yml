@@ -1,8 +1,10 @@
 name: CI
 
+# The fast gate every pull request must pass: commit messages, formatting,
+# and clippy plus the test suite on Linux x86_64. Builds for the other
+# platforms, release builds and size budgets run in full.yml (nightly, on
+# release PRs, and on PRs labelled full-ci).
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -21,8 +23,54 @@ env:
   AE3_REQUIRE_FIXTURES: "1"
 
 jobs:
+  # Decides whether the Rust jobs run. A pull request that only touches
+  # documentation skips them. Skipping inside the jobs (rather than with
+  # paths-ignore) matters: a skipped job satisfies a required status check,
+  # while a workflow that never starts leaves the check pending forever.
+  changes:
+    name: Changes
+    runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false
+          while IFS= read -r file; do
+            case "$file" in
+              *.md | LICENSE | .github/ISSUE_TEMPLATE/*) ;;
+              *) code=true ;;
+            esac
+          done < <(git diff --name-only "$BASE...$HEAD")
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Code changed: $code"
+
+  # Conventional Commits, checked by committed against committed.toml.
+  # release-plz builds the changelog and next version from these messages.
+  commits:
+    name: Commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: crate-ci/committed@v1.1.11
+
   fmt:
     name: rustfmt
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -31,109 +79,20 @@ jobs:
       - run: cargo fmt --all --check
 
   check:
-    name: ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # gui_budget is ae3-gui's size budget in MiB. It differs by platform:
-        # macOS draws through system frameworks, while Windows and Linux link
-        # their own accessibility, windowing and clipboard stacks (Linux:
-        # AT-SPI over zbus, X11, Wayland and client-side decorations), and
-        # x86_64 code is larger than aarch64. First CI measurements:
-        # macOS 5.9, Windows 9.6, Linux aarch64 9.6, Linux x86_64 12.8 MiB.
-        include:
-          - name: Windows x86_64
-            os: windows-latest
-            gui_budget: 11
-          - name: macOS arm64
-            os: macos-latest
-            gui_budget: 8
-          - name: Linux x86_64
-            os: ubuntu-24.04
-            gui_budget: 14
-          - name: Linux aarch64
-            os: ubuntu-24.04-arm
-            gui_budget: 11
-    runs-on: ${{ matrix.os }}
-    steps:
-      # Keep LF endings so scripts/fetch-fixtures.sh runs under Git Bash.
-      - if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@v6
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      # ae3-gui plays sounds through cpal, which links ALSA on Linux and
-      # needs its headers (alsa.pc) to build.
-      - name: Install ALSA headers
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
-
-      # Fixtures are game data and never committed. The cache key is the
-      # script itself, which holds the pinned list and its checksums; the
-      # script re-verifies every file, so a hit costs only the hashing.
-      - name: Cache fixtures
-        uses: actions/cache@v5
-        with:
-          path: fixtures
-          key: fixtures-${{ runner.os }}-${{ hashFiles('scripts/fetch-fixtures.sh') }}
-      - name: Fetch fixtures
-        shell: bash
-        run: bash scripts/fetch-fixtures.sh
-
-      # ae3-oracle's `oracle` feature links C zstd through unity-rs-core, so
-      # --all-features leaves that crate out here; its default-feature tests
-      # (the per-format fixture checks) still run, and the oracle job below
-      # runs the rest. Bash, so the first command's failure is not lost on
-      # Windows, where PowerShell would only report the last one.
-      - name: Clippy
-        shell: bash
-        run: |
-          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
-          cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
-
-      - name: Test
-        shell: bash
-        run: |
-          cargo test --workspace --exclude ae3-oracle --all-features --locked
-          cargo test -p ae3-oracle --locked
-
-      - name: Release build
-        run: cargo build --workspace --exclude ae3-oracle --release --locked
-
-      # Budgets are in MiB and apply to the default-feature release binaries:
-      # 5 for ae3 everywhere, and matrix.gui_budget for ae3-gui.
-      - name: Binary size budget
-        shell: bash
-        run: |
-          ext=""
-          if [[ "$RUNNER_OS" == "Windows" ]]; then ext=".exe"; fi
-          echo "| Binary | Bytes | Budget |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| --- | ---: | ---: |" >> "$GITHUB_STEP_SUMMARY"
-          status=0
-          check() {
-            local bin="$1" budget=$(( $2 * 1024 * 1024 )) size
-            size=$(wc -c < "target/release/$bin$ext" | tr -d '[:space:]')
-            echo "$bin$ext: $size bytes (budget $budget)"
-            echo "| $bin$ext | $size | $budget |" >> "$GITHUB_STEP_SUMMARY"
-            if (( size > budget )); then
-              echo "::error::$bin$ext is $size bytes, over its $2 MiB budget"
-              status=1
-            fi
-          }
-          check ae3 5
-          check ae3-gui ${{ matrix.gui_budget }}
-          exit $status
-
-  # The differential oracle (ADR-0006): every fixture texture decoded by
-  # ae3-core and by unity-rs-core must agree. unity-rs-core links C zstd,
-  # which is why it lives in this job and never in a shipped binary.
-  oracle:
-    name: Texture oracle
+    name: Check (Linux x86_64)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # ae3-gui plays sounds through cpal, which links ALSA on Linux.
+      - name: Install ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      # Fixtures are game data and never committed. The cache key is the
+      # script itself, which holds the pinned list and its checksums.
       - name: Cache fixtures
         uses: actions/cache@v5
         with:
@@ -142,17 +101,30 @@ jobs:
       - name: Fetch fixtures
         run: bash scripts/fetch-fixtures.sh
 
-      - name: Shipped binaries do not depend on the oracle
-        run: |
-          for dep in unity-rs-core zstd-sys; do
-            if cargo tree --locked -p ae3 -p ae3-gui --all-features --target all -e normal,build -i "$dep" >/dev/null 2>&1; then
-              echo "::error::ae3 or ae3-gui depends on $dep"
-              exit 1
-            fi
-          done
-
+      # ae3-oracle's `oracle` feature links C zstd, so --all-features leaves
+      # that crate out; full.yml runs the oracle itself.
       - name: Clippy
-        run: cargo clippy -p ae3-oracle --all-targets --all-features --locked -- -D warnings
+        run: |
+          cargo clippy --workspace --exclude ae3-oracle --all-targets --all-features --locked -- -D warnings
+          cargo clippy -p ae3-oracle --all-targets --locked -- -D warnings
 
-      - name: Oracle
-        run: cargo test -p ae3-oracle --all-features --locked -- --include-ignored --nocapture
+      - name: Test
+        run: |
+          cargo test --workspace --exclude ae3-oracle --all-features --locked
+          cargo test -p ae3-oracle --locked
+
+  # The single check branch protection requires. It passes when every job
+  # above passed or was skipped (documentation-only pull requests).
+  result:
+    name: CI result
+    if: always()
+    needs: [changes, commits, fmt, check]
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          if [[ "$FAILED" == "true" ]]; then
+            echo "::error::A CI job failed or was cancelled."
+            exit 1
+          fi

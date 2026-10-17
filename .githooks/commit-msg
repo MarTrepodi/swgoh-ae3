@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Opt-in commit-msg hook: check the message against committed.toml, the same
+# Conventional Commits rules CI enforces on every pull request.
+# Enable with: git config core.hooksPath .githooks
+set -euo pipefail
+if ! command -v committed >/dev/null 2>&1; then
+  echo "commit-msg: committed is not installed (cargo install --locked committed); skipping the check." >&2
+  exit 0
+fi
+exec committed --commit-file "$1"
