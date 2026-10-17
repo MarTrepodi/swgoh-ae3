@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::time::Instant;
 
 use ae3_core::Platform;
-use ae3_core::config::{AudioFormat, ImageFormat, Layout, StructuredMode};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, MeshFormat, StructuredMode};
 use eframe::egui::{self, RichText};
 
 use super::{error_label, warn_label};
@@ -177,6 +177,7 @@ pub fn output(app: &mut Ae3App, ui: &mut egui::Ui) {
         }
 
         structured_choice(app, ui);
+        mesh_choice(app, ui);
 
         let mut layout = app.config.layout;
         egui::ComboBox::from_id_salt("layout")
@@ -235,6 +236,34 @@ fn structured_choice(app: &mut Ae3App, ui: &mut egui::Ui) {
         );
     if structured != app.config.structured {
         app.change_setting(SettingChange::Structured(structured));
+    }
+}
+
+/// The file format Meshes are extracted in.
+fn mesh_choice(app: &mut Ae3App, ui: &mut egui::Ui) {
+    let mut format = app.config.mesh_format;
+    egui::ComboBox::from_id_salt("mesh-format")
+        .selected_text(mesh_label(format))
+        .show_ui(ui, |ui| {
+            for &f in MeshFormat::ALL {
+                ui.selectable_value(&mut format, f, mesh_label(f));
+            }
+        })
+        .response
+        .on_hover_text(
+            "Mesh format: Wavefront OBJ (geometry only), binary glTF with the main \
+             textures embedded, or both",
+        );
+    if format != app.config.mesh_format {
+        app.change_setting(SettingChange::MeshFormat(format));
+    }
+}
+
+fn mesh_label(f: MeshFormat) -> &'static str {
+    match f {
+        MeshFormat::Obj => "Meshes: OBJ",
+        MeshFormat::Glb => "Meshes: glb",
+        MeshFormat::Both => "Meshes: OBJ + glb",
     }
 }
 

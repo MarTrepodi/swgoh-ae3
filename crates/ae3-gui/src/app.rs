@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use ae3_core::config::{AudioFormat, ImageFormat, Layout, StructuredMode};
+use ae3_core::config::{AudioFormat, ImageFormat, Layout, MeshFormat, StructuredMode};
 use ae3_core::{AssetIndex, AssetInfo, AssetVersion, Config, ConfigFile, ExportOptions, Platform};
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
@@ -71,6 +71,7 @@ pub enum SettingChange {
     Layout(Layout),
     SkipExisting(bool),
     Structured(StructuredMode),
+    MeshFormat(MeshFormat),
 }
 
 pub struct Ae3App {
@@ -788,6 +789,10 @@ impl Ae3App {
             SettingChange::Structured(v) => {
                 self.config.structured = v;
                 s.structured = Some(v);
+            }
+            SettingChange::MeshFormat(v) => {
+                self.config.mesh_format = v;
+                s.mesh_format = Some(v);
             }
         }
         self.config_dirty_since = Some(Instant::now());
@@ -1726,6 +1731,24 @@ mod tests {
         );
         assert!(app.config_dirty_since.is_some(), "saved shortly");
         frame(&ctx, &mut app);
+    }
+
+    /// So does the Mesh format choice.
+    #[test]
+    fn mesh_format_setting_reaches_exports() {
+        let ctx = egui::Context::default();
+        let mut app = Ae3App::new(&ctx, Config::default(), ConfigFile::default(), None, None);
+        let format = |app: &Ae3App| ExportOptions::from_config(&app.config).mesh_format;
+        assert_eq!(format(&app), MeshFormat::Obj);
+        app.change_setting(SettingChange::MeshFormat(MeshFormat::Both));
+        assert_eq!(format(&app), MeshFormat::Both);
+        assert_eq!(app.config_file.settings.mesh_format, Some(MeshFormat::Both));
+        assert!(
+            painted_texts(&ctx, &mut app)
+                .iter()
+                .any(|t| t == "Meshes: OBJ + glb"),
+            "the Output section shows the choice"
+        );
     }
 
     /// Opening an Audio Package keeps the preview pane at its own width
