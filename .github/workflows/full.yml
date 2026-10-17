@@ -228,7 +228,11 @@ jobs:
   # their unexpanded name and the required check would never arrive.
   result:
     name: Full CI result
-    if: always()
+    # !cancelled(), not always(): a run superseded by a newer one on the
+    # same ref (concurrency) is cancelled as a whole, and its result must not
+    # post a failure next to the live run's. A job that fails or times out
+    # inside a live run still fails this one.
+    if: ${{ !cancelled() }}
     needs: [gate, build, oracle, ui]
     runs-on: ubuntu-24.04
     steps:
