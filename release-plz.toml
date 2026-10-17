@@ -62,8 +62,8 @@ commit_parsers = [
     { message = "^(chore|ci|build|test|style)", skip = true },
     # Merge commits repeat the commits they merge.
     { message = "^Merge ", skip = true },
-    # History before the convention (up to 0.1.0, whose section in
-    # CHANGELOG.md is written by hand) used plain imperative summaries.
+    # Fallbacks for a summary that does not follow the convention, so a
+    # slip still lands in a sensible group instead of being dropped.
     { message = "^(Add|Scaffold)\\b", group = "Added" },
     { message = "^Fix\\b", group = "Fixed" },
     { message = ".*", group = "Changed" },

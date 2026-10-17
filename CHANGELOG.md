@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0](https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v0.1.0)
 
-The first release. Its commits predate the Conventional Commits rule, so
-this section is written by hand.
+The first release. This section is written by hand; release-plz generates
+every later section from the Conventional Commits since the previous tag.
 
 ### Added
 
