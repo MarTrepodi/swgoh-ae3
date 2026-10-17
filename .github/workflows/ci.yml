@@ -52,6 +52,11 @@ jobs:
       - uses: actions/checkout@v5
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # ae3-gui plays sounds through cpal, which links ALSA on Linux and
+      # needs its headers (alsa.pc) to build.
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
 
       # Fixtures are game data and never committed. The cache key is the
       # script itself, which holds the pinned list and its checksums; the
