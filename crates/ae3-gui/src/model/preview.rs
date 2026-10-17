@@ -149,7 +149,6 @@ impl Preview {
     }
 
     /// The Assets to show as cells, in order.
-    #[cfg(test)]
     #[must_use]
     pub fn cells(&self) -> Vec<&AssetInfo> {
         match &self.status {
