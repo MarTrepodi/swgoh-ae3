@@ -1,0 +1,17 @@
+# Track only what is needed to build and release AE3.
+# Everything at the root is ignored unless explicitly allowed below,
+# which keeps design and working materials (GLOSSARY.md, docs/, .claude/,
+# notes, scratch files) out of git without having to list each one.
+/*
+
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/rust-toolchain.toml
+!/crates/
+!/.github/
+!/LICENSE
+!/README.md
+
+# Build output, wherever it appears
+target/
