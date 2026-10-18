@@ -6,7 +6,11 @@
 [workspace]
 # Versions come from the vX.Y.Z git tags, not a registry.
 git_only = true
-repo_url = "https://github.com/swgoh-utils/swgoh-ae3"
+# No repo_url: release-plz takes the repository from the git remote, so it
+# follows the repository wherever it lives. A fixed URL broke tagging: the
+# release step (unlike release-pr, which the action gives the real URL)
+# looks up the merged release PR in repo_url, and a repository that does
+# not exist there has no such PR, so no tag was ever created.
 git_tag_name = "v{{ version }}"
 # Only the ae3 package below tags; one tag releases every binary.
 git_tag_enable = false
