@@ -912,13 +912,68 @@ fn a_newer_ae3_release_is_announced_and_can_be_dismissed() {
         app.model.release.is_some()
     });
 
-    let link = h.get_by_label("AE3 v99.0.0 available");
+    let link = h.get_by_label("swgoh-ae3 v99.0.0 available");
     assert_eq!(link.accesskit_node().role(), Role::Link);
     click(&mut h, "×");
-    assert!(h.query_by_label("AE3 v99.0.0 available").is_none());
+    assert!(h.query_by_label("swgoh-ae3 v99.0.0 available").is_none());
     let saved = dir.path().join("cache").join(ReleaseState::FILE);
     wait_for(&mut h, "the dismissal to be saved", |_| {
         std::fs::read_to_string(&saved)
             .is_ok_and(|s| ReleaseState::parse(&s).dismissed.as_deref() == Some("v99.0.0"))
     });
+}
+
+#[test]
+fn about_shows_the_version_and_checks_for_updates_on_request() {
+    use ae3_gui::model::release::{CURRENT, ManualCheck, REPOSITORY, latest_release_api};
+
+    let dir = TempDir::new("about");
+    let cdn = FakeCdn::empty();
+    cdn.publish_latest(&synthetic_manifest(SYNTHETIC));
+    // The daily check is off: only the button may ask GitHub.
+    let mut spec = Spec::new(dir.path(), cdn.net());
+    spec.config.check_for_updates = false;
+    let mut h = harness(spec);
+    let asks = || cdn.requests_containing("api.github.com");
+
+    click(&mut h, "About");
+    h.get_by_label("swgoh-ae3");
+    h.get_by_label(&format!("Version {CURRENT}"));
+    assert_eq!(asks(), 0, "opening About asks nothing");
+
+    let check = |h: &mut H, expected: &dyn Fn(&ManualCheck) -> bool| {
+        click(h, "Check for updates");
+        wait_for(h, "the update check", |app| {
+            expected(&app.model.manual_check)
+        });
+    };
+
+    // Nothing published yet: GitHub answers 404.
+    check(&mut h, &|c| *c == ManualCheck::NotPublished);
+    h.get_by_label("No release has been published yet.");
+
+    // A newer release: a link to it.
+    let api = latest_release_api(REPOSITORY).unwrap();
+    let publish = |tag: &str| {
+        cdn.put(
+            &api,
+            format!(r#"{{"tag_name":"{tag}","html_url":"{REPOSITORY}/releases/tag/{tag}"}}"#)
+                .as_bytes(),
+        );
+    };
+    publish("v99.0.0");
+    check(&mut h, &|c| matches!(c, ManualCheck::Newer { .. }));
+    let link = h.get_by_label("swgoh-ae3 v99.0.0 is available");
+    assert_eq!(link.accesskit_node().role(), Role::Link);
+
+    // The running version is the newest.
+    publish(&format!("v{CURRENT}"));
+    check(&mut h, &|c| *c == ManualCheck::UpToDate);
+    h.get_by_label(&format!("swgoh-ae3 {CURRENT} is the latest release."));
+    assert_eq!(asks(), 3, "each click asks once, ignoring the daily limit");
+
+    // The window closes with its title-bar button.
+    h.state_mut().app_mut().model.about_open = false;
+    h.run_ok();
+    assert!(h.query_by_label("Check for updates").is_none());
 }

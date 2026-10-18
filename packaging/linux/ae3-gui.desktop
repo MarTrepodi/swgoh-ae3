@@ -1,9 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=AE3
+Name=swgoh-ae3
 GenericName=Asset Extractor
 Comment=Download, preview and export Star Wars: Galaxy of Heroes assets
 Exec=ae3-gui
+Icon=swgoh-ae3
 Terminal=false
 Categories=Utility;
 Keywords=swgoh;assets;extractor;unity;

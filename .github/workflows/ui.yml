@@ -346,7 +346,11 @@ jobs:
   # when the caller already built the binaries).
   result:
     name: UI result
-    if: always()
+    # !cancelled(), not always(): a run superseded by a newer one on the
+    # same ref (concurrency) is cancelled as a whole, and its result must not
+    # post a failure next to the live run's. A job that fails or times out
+    # inside a live run still fails this one.
+    if: ${{ !cancelled() }}
     needs: [build, interaction, snapshots, e2e]
     runs-on: ubuntu-24.04
     steps:

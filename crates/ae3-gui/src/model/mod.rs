@@ -181,6 +181,10 @@ pub struct Model {
     /// What the AE3 release check knows; `None` until it reports, and
     /// always when `check-for-updates` is off.
     pub release: Option<release::ReleaseState>,
+    /// Whether the About window is open.
+    pub about_open: bool,
+    /// The About window's "Check for updates" result.
+    pub manual_check: release::ManualCheck,
     pub extract_job: Job<ExtractProgress>,
     pub extract_label: String,
     pub summary: Option<ExtractSummary>,
