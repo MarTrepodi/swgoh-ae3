@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eframe::egui::{self, Event, Key, Modifiers, RawInput};
+use eframe::egui::{Event, Key, Modifiers, RawInput};
 
 /// What a menu item asks of the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +110,7 @@ pub struct Native {
 /// Call on the main thread once the application has launched, as eframe's
 /// app creator runs.
 #[cfg(target_os = "macos")]
-pub fn install(ctx: &egui::Context, inbox: Inbox) -> Result<Native, String> {
+pub fn install(ctx: &eframe::egui::Context, inbox: Inbox) -> Result<Native, String> {
     use muda::accelerator::{Accelerator, Code, Modifiers as Mods};
     use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 
