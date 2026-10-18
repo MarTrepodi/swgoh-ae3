@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/MarTrepodi/swgoh-ae3/compare/v0.1.0...v0.1.1) - 2026-10-18
+
+### Added
+
+- *(gui)* rename to swgoh-ae3, add the icon and an About window
+- *(gui)* name every input widget for screen readers
+- *(gui)* add a scripted smoke run for CI
+
+### Changed
+
+- *(gui)* run the window from a library with seams for tests
+
+### Fixed
+
+- *(gui)* let table clicks reach the row and the preview cells
+
 ## [0.1.0](https://github.com/swgoh-utils/swgoh-ae3/releases/tag/v0.1.0)
 
 The first release. This section is written by hand; release-plz generates
