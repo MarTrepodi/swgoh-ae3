@@ -45,7 +45,7 @@ Pre-built binaries are published on the [Releases](https://github.com/swgoh-util
 | Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
 | Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
 
-Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
+Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). The GUI archives add `FONT-NOTICES.md`, the licenses of the fonts and icons the GUI embeds. Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
 
 To add the GUI to a Linux desktop's application menu, run this from the extracted folder:
 
@@ -150,6 +150,20 @@ Exit codes: `0` success, `1` error, `2` invalid arguments or settings, `3` parti
 
 AE3 writes to `{output}/{category}/{bundle}/` by default. Pass `--layout ae2` to get swgoh-ae2's `{output}/{prefix}/` layout. ae2's "prefix" is called a **category** in AE3.
 
+## Desktop GUI
+
+`ae3-gui` (`swgoh-ae3.app` on macOS) works in one window:
+
+- **Header:** the asset version shown, such as `Asset Version 100054 · Windows · PROD`, the "swgoh-ae3 vX available" notice when there is one, and **About**.
+- **Sidebar** (drag its edge to resize it):
+  - **Game data:** pick the platform, enter an asset version (empty means the latest), then press **Fetch latest** or **Load Manifest**. When a newer asset version is published while the window is open, the card offers to load it.
+  - **Output:** where extractions go and in which formats. **Edit settings** opens the **Settings** window with every option: the output folder, image format, sprite atlas splitting and padding restoration, audio format, structured data, mesh format, folder layout and skipping existing files. Changes apply at once and are saved to `config.toml`.
+  - **Asset Index:** the background build's progress with **Pause** and **Resume**, how many bundles it covers, and how the display names stand.
+- **Main area:** the banner switches between **Bundles** and **Diff** and counts the packages shown and the search matches. On **Bundles**, search by asset, bundle or display name; matching units, abilities, gear, materials and player portraits appear as chips, and asset type chips filter the table. Select a bundle to preview its assets on the right, and double-click one to open it in the detail viewer.
+- **Action bar:** the running extraction's progress, or the last one's result, on the left; the extractions on the right, with the most specific one highlighted: the assets checked in the preview, else the selected packages, else everything the table shows. On the **Diff** tab it extracts the Diff's packages.
+
+The window follows the system's light or dark appearance.
+
 ## Configuration
 
 Settings live in a single TOML file, `config.toml`, shared by the CLI and the GUI:
@@ -185,7 +199,7 @@ Each key also has an environment variable: `AE3_PLATFORM`, `AE3_OUTPUT_DIR`, `AE
 
 With `check-for-updates` on, the GUI asks GitHub Releases at most once a day whether a newer AE3 has been published, without slowing the window down, and shows "swgoh-ae3 vX available" with a link to the release page. It never downloads or installs anything. The CLI never checks.
 
-The **About** button (top right of the window) shows the running version and has a **Check for updates** button, which asks GitHub straight away, whether or not `check-for-updates` is on.
+The **About** button (top right of the window, and **swgoh-ae3** → **About swgoh-ae3** in the macOS menu bar) shows the running version and has a **Check for updates** button, which asks GitHub straight away, whether or not `check-for-updates` is on.
 
 ## Building from source
 
@@ -242,6 +256,6 @@ Bug reports, feature ideas and pull requests are welcome. Read the [contributing
 
 ## License
 
-AE3 is released under the [MIT License](LICENSE). Third-party components keep their own licenses, which are reproduced in each release. These include the BSD-3-Clause Wwise Vorbis codebooks from ww2ogg.
+AE3 is released under the [MIT License](LICENSE). Third-party components keep their own licenses, which are reproduced in each release. These include the BSD-3-Clause Wwise Vorbis codebooks from ww2ogg, and the GUI's Ubuntu fonts (Ubuntu Font Licence 1.0) and Phosphor icons (MIT).
 
 *Star Wars: Galaxy of Heroes* and its assets are the property of their respective owners. AE3 is an unofficial community tool, not affiliated with or endorsed by Electronic Arts, Capital Games or Lucasfilm. Use extracted assets in line with the game's terms and applicable law.
