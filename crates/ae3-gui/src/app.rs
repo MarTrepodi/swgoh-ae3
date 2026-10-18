@@ -119,8 +119,9 @@ pub struct Ae3App {
     extract_cancel: Option<Arc<AtomicBool>>,
     pub diff_store: Option<Store>,
     checker: Option<TextureHandle>,
-    /// The application icon, for the About window; loaded on first use.
-    about_icon: Option<TextureHandle>,
+    /// The application icon, for the header and the About window; loaded
+    /// on first use.
+    app_icon: Option<TextureHandle>,
     max_texture_side: u32,
     pub last_load_error: Option<String>,
 }
@@ -199,7 +200,7 @@ impl Ae3App {
             extract_cancel: None,
             diff_store: None,
             checker: None,
-            about_icon: None,
+            app_icon: None,
             max_texture_side: 2048,
             last_load_error: None,
         }
@@ -377,13 +378,14 @@ impl Ae3App {
         });
     }
 
-    /// The application icon as a texture, for the About window.
-    pub fn about_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
-        if self.about_icon.is_none() {
-            self.about_icon = crate::icon::color_image()
+    /// The application icon as a texture, for the header and the About
+    /// window.
+    pub fn app_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.app_icon.is_none() {
+            self.app_icon = crate::icon::color_image()
                 .map(|image| ctx.load_texture("app-icon", image, TextureOptions::LINEAR));
         }
-        self.about_icon.clone()
+        self.app_icon.clone()
     }
 
     /// The About window's check came back.
@@ -2106,8 +2108,17 @@ mod tests {
         assert!(
             painted_texts(&ctx, &mut app)
                 .iter()
-                .any(|t| t == "Meshes: OBJ + glb"),
-            "the Output section shows the choice"
+                .any(|t| t == "PNG · Ogg Vorbis · OBJ + glb"),
+            "the Output card sums up the choice"
+        );
+        app.model.windows.settings = true;
+        // A new window is sized on its first frame and shown on the next.
+        painted_texts(&ctx, &mut app);
+        assert!(
+            painted_texts(&ctx, &mut app)
+                .iter()
+                .any(|t| t == "OBJ + glb"),
+            "the Settings window shows it"
         );
     }
 

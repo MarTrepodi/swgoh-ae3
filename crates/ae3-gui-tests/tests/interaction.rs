@@ -94,7 +94,7 @@ fn shown(h: &H, names: &[&str]) -> Vec<String> {
 }
 
 /// A window over a [`FakeCdn`] publishing the synthetic Manifest, loaded with
-/// Fetch Latest.
+/// Fetch latest.
 fn synthetic_window(name: &str) -> (TempDir, Arc<FakeCdn>, H) {
     let dir = TempDir::new(name);
     let cdn = FakeCdn::empty();
@@ -104,9 +104,9 @@ fn synthetic_window(name: &str) -> (TempDir, Arc<FakeCdn>, H) {
     (dir, cdn, h)
 }
 
-/// Presses Fetch Latest and waits for the Manifest.
+/// Presses Fetch latest and waits for the Manifest.
 fn fetch_latest(h: &mut H) {
-    click(h, "Fetch Latest");
+    click(h, "Fetch latest");
     wait_for(h, "the Manifest", |app| !app.model.manifest_job.is_active());
 }
 
@@ -260,7 +260,7 @@ fn the_type_filter_shows_only_packages_holding_that_kind() {
     // Bundles whose contents are not known yet are hidden by any filter.
     click(&mut h, "Texture");
     assert_eq!(shown(&h, &names), ["audio_test_ui", "audio_test_music"]);
-    click(&mut h, "All");
+    click(&mut h, "All types");
     assert_eq!(shown(&h, &names), names);
 }
 
@@ -315,9 +315,9 @@ fn shift_and_command_clicks_select_several_rows() {
             "vanity_testpilot"
         ]
     );
-    h.get_by_label("Extract Selected (4)");
+    h.get_by_label("Extract selected (4)");
 
-    click(&mut h, "Clear");
+    click(&mut h, "Clear selection");
     assert_eq!(h.state().app().model.selection.len(), 0);
 }
 
@@ -769,7 +769,7 @@ fn the_diff_tab_compares_two_manifests() {
     h.get_by_label("charui_retired_test");
     h.get_by_label("Removed Packages exist only in the older Asset Version.");
     assert!(
-        h.get_by_label("Extract All (1)")
+        h.get_by_label("Extract all (1)")
             .accesskit_node()
             .is_disabled()
     );
@@ -784,6 +784,10 @@ fn output_settings_persist_to_the_config_file() {
     let mut spec = Spec::new(dir.path(), FakeCdn::offline().net());
     spec.config_path = Some(path.clone());
     let mut h = harness(spec);
+    // The sidebar sums the settings up; they are edited in their window.
+    h.get_by_label("Layout default");
+    assert!(h.query_by_label("Skip existing").is_none());
+    click(&mut h, "Edit settings");
 
     click(&mut h, "Skip existing");
     click(&mut h, "Split sprite atlases");
@@ -793,10 +797,23 @@ fn output_settings_persist_to_the_config_file() {
             .accesskit_node()
             .is_disabled()
     );
-    h.get_by_value("Layout: default").click();
+    let layout = h.get_by_role_and_label(Role::ComboBox, "Layout");
+    assert_eq!(
+        layout.value().as_deref(),
+        Some("Default: {category}/{bundle}/")
+    );
+    layout.click();
     h.run_ok();
-    click(&mut h, "Layout: ae2");
-    h.get_by_value("Layout: ae2");
+    click(&mut h, "ae2: {category}/");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Layout")
+            .value()
+            .as_deref(),
+        Some("ae2: {category}/")
+    );
+    // The summary follows.
+    h.get_by_label("Layout ae2 · skip existing");
+    h.get_by_label("Atlases whole");
 
     // Saved a second after the last change.
     wait_for(&mut h, "the settings file", |_| path.exists());
@@ -888,7 +905,7 @@ fn a_network_failure_is_shown_as_an_error() {
     fetch_latest(&mut h);
     h.get_by_label_contains("could not determine the Asset Version automatically");
     assert!(h.state().app().model.manifest.is_none());
-    h.get_by_label_contains("Choose a Platform and press Fetch Latest");
+    h.get_by_label_contains("Choose a Platform and press Fetch latest");
 
     // An explicit Asset Version, entered with the Enter key, fails too.
     type_into(&mut h, "Asset Version", "100055");
@@ -946,7 +963,7 @@ fn about_shows_the_version_and_checks_for_updates_on_request() {
     let asks = || cdn.requests_containing("api.github.com");
 
     click(&mut h, "About");
-    h.get_by_label("swgoh-ae3");
+    h.get_by_label("About swgoh-ae3");
     h.get_by_label(&format!("Version {CURRENT}"));
     assert_eq!(asks(), 0, "opening About asks nothing");
 
@@ -982,7 +999,7 @@ fn about_shows_the_version_and_checks_for_updates_on_request() {
     assert_eq!(asks(), 3, "each click asks once, ignoring the daily limit");
 
     // The window closes with its title-bar button.
-    h.state_mut().app_mut().model.about_open = false;
+    h.state_mut().app_mut().model.windows.about = false;
     h.run_ok();
     assert!(h.query_by_label("Check for updates").is_none());
 }

@@ -11,7 +11,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, TextFormat, Vec2, vec2,
 };
 
-use super::{error_label, kind_label};
+use super::{error_label, icons, kind_label, theme, widgets};
 use crate::app::{Ae3App, Detail};
 use crate::highlight::{Language, TokenKind, tokenize};
 use crate::model::playback::SoundRef;
@@ -34,6 +34,8 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
     egui::Window::new(title)
         .id(egui::Id::unique("ae3-detail"))
         .open(&mut open)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
         .default_size([780.0, 600.0])
         .min_size([320.0, 240.0])
         .resizable(true)
@@ -112,15 +114,31 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
 
 fn header(ui: &mut egui::Ui, detail: &Detail) {
     let a = &detail.asset;
+    let p = theme::palette(ui);
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(kind_label(a.kind)).strong());
-        ui.label(a.script_class.as_deref().unwrap_or(&a.class_name));
-        ui.label(format!("path id {}", a.path_id));
-        ui.label(format_bytes(a.byte_size));
-        if let Some(path) = &a.container_path {
-            ui.label(RichText::new(path).monospace().small());
-        }
+        widgets::with_icon(
+            ui,
+            RichText::new(icons::kind(a.kind)).color(p.accent_text),
+            |ui| ui.label(RichText::new(kind_label(a.kind)).family(theme::medium())),
+        );
+        widgets::muted(
+            ui,
+            format!(
+                "{} · path id {} · {}",
+                a.script_class.as_deref().unwrap_or(&a.class_name),
+                a.path_id,
+                format_bytes(a.byte_size)
+            ),
+        );
     });
+    if let Some(path) = &a.container_path {
+        ui.label(
+            RichText::new(path)
+                .monospace()
+                .size(theme::size::SMALL)
+                .color(p.text_muted),
+        );
+    }
 }
 
 fn image_info(image: &DetailImage) -> String {
@@ -153,16 +171,22 @@ fn image_toolbar(ui: &mut egui::Ui, detail: &mut Detail, info: &str) -> bool {
         if let Some(format) = format {
             let _ = write!(text, " · {format}");
         }
-        ui.label(RichText::new(text).strong());
+        ui.label(RichText::new(text).family(theme::medium()));
         ui.separator();
-        if ui.button("Fit").clicked() {
+        if widgets::button(ui, Some(icons::FIT), "Fit", true)
+            .on_hover_text("Fit the image to the view")
+            .clicked()
+        {
             detail.fitted = false;
         }
-        if ui.button("1:1").clicked() {
+        if widgets::button(ui, None, "1:1", true)
+            .on_hover_text("One image pixel per screen pixel")
+            .clicked()
+        {
             detail.transform = ViewTransform::default();
             detail.fitted = true;
         }
-        ui.label(format!("{:.0}%", detail.transform.zoom * 100.0));
+        widgets::muted(ui, format!("{:.0}%", detail.transform.zoom * 100.0));
         ui.separator();
         let ch = &mut detail.channels;
         for (on, name, color) in [
@@ -313,15 +337,15 @@ fn atlas_body(
     checker: &egui::TextureHandle,
 ) -> bool {
     ui.horizontal_wrapped(|ui| {
-        ui.label(format!("{} Sprites", atlas.sprites.len()));
+        ui.label(RichText::new(format!("{} Sprites", atlas.sprites.len())).family(theme::medium()));
         if let Some(t) = &atlas.texture {
-            ui.label(format!("texture {} in {}", t.name, t.asset.package));
+            widgets::muted(ui, format!("texture {} in {}", t.name, t.asset.package));
         }
         if atlas.replacement.is_some() {
-            ui.label("(reference Atlas, showing its target)");
+            widgets::muted(ui, "(reference Atlas, showing its target)");
         }
         if (atlas.pixel_size - 1.0).abs() > f64::EPSILON {
-            ui.label(format!("pixel size {}", atlas.pixel_size));
+            widgets::muted(ui, format!("pixel size {}", atlas.pixel_size));
         }
     });
     if let Some(e) = error {
@@ -365,7 +389,7 @@ fn atlas_body(
 }
 
 fn sprite_info(ui: &mut egui::Ui, s: &SpriteRect) {
-    ui.label(RichText::new(&s.name).strong());
+    ui.label(RichText::new(&s.name).family(theme::medium()));
     ui.label(format!("x {} y {} · {}×{}", s.x, s.y, s.width, s.height));
     let (w, h) = s.restored_size();
     if (w, h) != (s.width, s.height) {
@@ -477,7 +501,10 @@ fn token_color(kind: TokenKind, dark: bool, plain: Color32) -> Color32 {
 fn text_view(ui: &mut egui::Ui, text: &str, extension: &str, truncated: bool) {
     let language = Language::from_extension(extension);
     ui.horizontal(|ui| {
-        ui.label(format!("{extension} · {} characters", text.chars().count()));
+        widgets::muted(
+            ui,
+            format!("{extension} · {} characters", text.chars().count()),
+        );
         if truncated {
             super::warn_label(ui, "(truncated; extract the Asset for the whole text)");
         }

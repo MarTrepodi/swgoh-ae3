@@ -155,7 +155,7 @@ pub mod size {
     /// Card titles.
     pub const SECTION: f32 = 15.5;
     /// Headings: the preview's Package, window titles.
-    pub const HEADING: f32 = 20.0;
+    pub const HEADING: f32 = 18.0;
     /// The application name in the header.
     pub const BRAND: f32 = 17.0;
 }

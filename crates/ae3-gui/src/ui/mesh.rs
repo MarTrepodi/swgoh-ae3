@@ -386,9 +386,9 @@ pub fn view(
         if !preview.has_normals && preview.vertex_count > 0 {
             text.push_str(" · normals computed");
         }
-        ui.label(RichText::new(text).strong());
+        ui.label(RichText::new(text).family(super::theme::medium()));
         ui.separator();
-        if ui.button("Reset view").clicked() {
+        if super::widgets::button(ui, Some(super::icons::RESET), "Reset view", true).clicked() {
             *camera = OrbitCamera::default();
         }
         ui.label(

@@ -145,6 +145,13 @@ impl DiffState {
     }
 }
 
+/// The windows that open over the main one, besides the detail viewer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Windows {
+    pub about: bool,
+    pub settings: bool,
+}
+
 /// Everything the window shows, minus textures and job handles.
 #[derive(Debug, Default)]
 pub struct Model {
@@ -181,8 +188,8 @@ pub struct Model {
     /// What the AE3 release check knows; `None` until it reports, and
     /// always when `check-for-updates` is off.
     pub release: Option<release::ReleaseState>,
-    /// Whether the About window is open.
-    pub about_open: bool,
+    /// Which of the About and Settings windows are open.
+    pub windows: Windows,
     /// The About window's "Check for updates" result.
     pub manual_check: release::ManualCheck,
     pub extract_job: Job<ExtractProgress>,

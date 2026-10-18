@@ -1,20 +1,23 @@
-//! The Bundles table: type filter, sortable columns, virtualized rows and
-//! multi-select.
-
-use std::fmt::Write as _;
+//! The Bundles table: sortable columns, virtualized rows and multi-select,
+//! in a card.
 
 use ae3_core::{AssetKinds, PackageKind};
 use eframe::egui::{self, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
-use super::{icons, kind_label};
+use super::widgets;
+use super::{icons, kind_label, theme};
 use crate::app::Ae3App;
 use crate::model::selection::ClickModifiers;
-use crate::model::table::{SHOWN_KINDS, SortKey, format_bytes};
+use crate::model::table::{SortKey, format_bytes};
 
-pub const ROW_HEIGHT: f32 = 20.0;
+/// Height of a table row: room for the descenders and underscores of
+/// body text.
+pub const ROW_HEIGHT: f32 = 26.0;
+/// Height of a table's header row.
+pub const HEADER_HEIGHT: f32 = 24.0;
 
-/// The Types cell: one glyph per kind, or a hint while unknown.
+/// The Types cell: one icon per kind, or a hint while unknown.
 pub fn kinds_text(kind: PackageKind, kinds: Option<AssetKinds>) -> String {
     match (kind, kinds) {
         (_, Some(k)) if k.is_empty() => "—".to_owned(),
@@ -40,64 +43,41 @@ pub fn click_modifiers(ui: &egui::Ui) -> ClickModifiers {
     })
 }
 
-fn type_filter(app: &mut Ae3App, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Types");
-        let mut changed = false;
-        for kind in SHOWN_KINDS {
-            let on = app.model.filter.kinds.contains(kind);
-            let text = icons::with(icons::kind(kind), kind_label(kind));
-            if ui
-                .selectable_label(on, text)
-                .accessible_name(kind_label(kind))
-                .on_hover_text(format!("Only Packages holding {} Assets", kind_label(kind)))
-                .clicked()
-            {
-                app.model.filter.toggle(kind);
-                changed = true;
-            }
-        }
-        if app.model.filter.is_active() && ui.small_button("All").clicked() {
-            app.model.filter = crate::model::table::TypeFilter::default();
-            changed = true;
-        }
-        if changed {
-            app.model.refresh_visible();
-        }
-        ui.separator();
-        let shown = app.model.visible.len();
-        let total = app.model.rows.len();
-        let mut text = if shown == total {
-            format!("{total} Packages")
-        } else {
-            format!("{shown} of {total} Packages")
-        };
-        if !app.model.selection.is_empty() {
-            let _ = write!(text, " · {} selected", app.model.selection.len());
-        }
-        ui.label(RichText::new(text).weak());
-        if !app.model.visible.is_empty() && ui.small_button("Select all").clicked() {
-            let visible = app.model.visible.clone();
-            app.model.selection.select_all(&visible);
-        }
-        if !app.model.selection.is_empty() && ui.small_button("Clear").clicked() {
-            app.model.selection.clear();
-        }
-    });
+/// A column title: small, medium weight, muted.
+pub fn column_title(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    let p = theme::palette(ui);
+    ui.label(
+        RichText::new(title)
+            .family(theme::medium())
+            .size(theme::size::SMALL)
+            .color(p.text_muted),
+    )
 }
 
 fn header_button(ui: &mut egui::Ui, app: &mut Ae3App, title: &str, key: SortKey) {
+    let p = theme::palette(ui);
     let sort = app.model.sort;
     let arrow = match (sort.key == key, sort.descending) {
         (true, false) => icons::SORT_UP,
         (true, true) => icons::SORT_DOWN,
         _ => "",
     };
+    let color = if sort.key == key {
+        p.text
+    } else {
+        p.text_muted
+    };
     let response = ui
         .add(
-            egui::Label::new(RichText::new(format!("{title} {arrow}")).strong())
-                .sense(Sense::click()),
+            egui::Label::new(
+                RichText::new(format!("{title} {arrow}"))
+                    .family(theme::medium())
+                    .size(theme::size::SMALL)
+                    .color(color),
+            )
+            .sense(Sense::click()),
         )
+        .on_hover_text(format!("Sort by {}", title.to_lowercase()))
         .accessible_name(title);
     if response.clicked() {
         app.model.sort.click(key);
@@ -105,21 +85,42 @@ fn header_button(ui: &mut egui::Ui, app: &mut Ae3App, title: &str, key: SortKey)
     }
 }
 
-/// The table of Packages.
+/// What the table shows before a Manifest is loaded.
+pub fn empty_state(ui: &mut egui::Ui, icon: &str, title: &str, hint: &str) {
+    let p = theme::palette(ui);
+    ui.vertical_centered(|ui| {
+        ui.add_space((ui.available_height() / 2.0 - 70.0).max(16.0));
+        ui.label(RichText::new(icon).size(40.0).color(p.text_muted));
+        ui.add_space(4.0);
+        ui.label(RichText::new(title).text_style(theme::section_style()));
+        ui.add(egui::Label::new(RichText::new(hint).color(p.text_muted)).wrap());
+    });
+}
+
+/// The table of Packages, in a card filling the space left.
 pub fn bundles(app: &mut Ae3App, ui: &mut egui::Ui) {
-    if app.model.manifest.is_none() {
-        ui.centered_and_justified(|ui| {
-            ui.label(
-                RichText::new("Choose a Platform and press Fetch Latest, or enter an Asset Version and press Load Manifest.")
-                    .weak(),
-            );
+    widgets::card_frame(ui)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            if app.model.manifest.is_none() {
+                empty_state(
+                    ui,
+                    icons::BUNDLES,
+                    "No Manifest loaded",
+                    "Choose a Platform and press Fetch latest, or enter an Asset Version and \
+                     press Load Manifest.",
+                );
+                return;
+            }
+            table(app, ui);
         });
-        return;
-    }
-    type_filter(app, ui);
-    ui.add_space(2.0);
+}
+
+fn table(app: &mut Ae3App, ui: &mut egui::Ui) {
     let mods = click_modifiers(ui);
     let mut clicked: Option<usize> = None;
+    let p = theme::palette(ui);
     // Borrowed out of the model while drawing; put back below.
     let visible = std::mem::take(&mut app.model.visible);
     // A click on a cell's text selects its row. Selectable labels would
@@ -130,14 +131,18 @@ pub fn bundles(app: &mut Ae3App, ui: &mut egui::Ui) {
         .striped(true)
         .sense(Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::initial(120.0).at_least(60.0).clip(true))
-        .column(Column::initial(84.0).at_least(60.0).clip(true))
+        .column(Column::remainder().at_least(140.0).clip(true))
+        .column(Column::initial(110.0).at_least(48.0).clip(true))
+        .column(Column::initial(80.0).at_least(64.0).clip(true))
         .auto_shrink(false)
-        .header(ROW_HEIGHT, |mut header| {
+        .header(HEADER_HEIGHT, |mut header| {
             header.col(|ui| header_button(ui, app, "Name", SortKey::Name));
             header.col(|ui| header_button(ui, app, "Types", SortKey::Types));
-            header.col(|ui| header_button(ui, app, "Size", SortKey::Size));
+            header.col(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    header_button(ui, app, "Size", SortKey::Size);
+                });
+            });
         })
         .body(|body| {
             body.rows(ROW_HEIGHT, visible.len(), |mut row| {
@@ -159,18 +164,18 @@ pub fn bundles(app: &mut Ae3App, ui: &mut egui::Ui) {
                         let s = if matched == 1 { "" } else { "es" };
                         ui.label(
                             RichText::new(format!("{matched} match{s}"))
-                                .small()
-                                .color(super::match_color(ui)),
+                                .size(theme::size::SMALL)
+                                .color(p.amber),
                         );
                     }
                 });
                 row.col(|ui| {
-                    ui.label(kinds_text(r.kind, r.kinds))
+                    ui.label(RichText::new(kinds_text(r.kind, r.kinds)).color(p.text_muted))
                         .on_hover_text(kinds_tooltip(r.kinds));
                 });
                 row.col(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format_bytes(r.size));
+                        ui.label(RichText::new(format_bytes(r.size)).color(p.text_muted));
                     });
                 });
                 if row.response().clicked() {
