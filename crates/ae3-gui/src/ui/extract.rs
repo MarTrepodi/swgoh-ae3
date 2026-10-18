@@ -122,7 +122,7 @@ pub fn bar(app: &mut Ae3App, ui: &mut egui::Ui) {
                         });
                 });
             }
-            if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+            if super::small_icon_button(ui, super::icons::CLOSE, "Dismiss summary").clicked() {
                 app.model.summary = None;
             }
         } else {

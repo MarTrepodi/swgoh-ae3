@@ -7,7 +7,7 @@ use ae3_core::AssetInfo;
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, vec2};
 use egui_extras::{Column, TableBuilder};
 
-use super::{error_label, glyph, kind_label, match_color};
+use super::{error_label, icons, kind_label, match_color};
 use crate::app::Ae3App;
 use crate::model::playback::{PlayState, SoundRef};
 use crate::model::preview::{PreviewStatus, has_image, summary};
@@ -217,7 +217,7 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
             painter.text(
                 thumb_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                glyph(asset.kind),
+                icons::kind(asset.kind),
                 egui::FontId::proportional(40.0),
                 visuals.weak_text_color(),
             );
@@ -399,17 +399,19 @@ pub const PLAY_W: f32 = 84.0;
 pub fn play_control(ui: &mut egui::Ui, state: PlayState<'_>) -> bool {
     match state {
         PlayState::Idle => ui
-            .small_button("▶ Play")
+            .small_button(icons::with(icons::PLAY, "Play"))
+            .accessible_name("Play")
             .on_hover_text("Play this sound")
             .clicked(),
         PlayState::Playing => ui
-            .small_button("■ Stop")
+            .small_button(icons::with(icons::STOP, "Stop"))
+            .accessible_name("Stop")
             .on_hover_text("Stop playing")
             .clicked(),
         PlayState::Decoding => {
             ui.spinner();
             // A press while decoding cancels it.
-            ui.small_button("■").on_hover_text("Stop").clicked()
+            super::small_icon_button(ui, icons::STOP, "Stop").clicked()
         }
         PlayState::Unplayable(why) => {
             ui.label(RichText::new("can't play").weak())

@@ -21,6 +21,10 @@ eframe = { workspace = true, features = [
 # is off: it would also embed Ubuntu Light, which the theme replaces with
 # Ubuntu Regular and Medium (assets/fonts/, src/ui/theme.rs).
 epaint_default_fonts = "0.37"
+# Phosphor icons (regular), as a compile-time subset of the icons the window
+# uses (src/ui/icons.rs). 0.14 targets egui 0.36; only its codepoints, font
+# and const subsetter are used, so none of that egui is linked.
+egui-phosphor = { version = "0.14", default-features = false, features = ["subset"] }
 # Only the table widget; no image loaders, no mime guessing.
 egui_extras = { version = "0.37", default-features = false }
 # Decodes the embedded application icon; the same png that ae3-image uses.

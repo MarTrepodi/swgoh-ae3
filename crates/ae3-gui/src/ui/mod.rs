@@ -7,47 +7,30 @@ mod about;
 mod detail;
 mod diff;
 mod extract;
+pub mod icons;
 pub mod mesh;
 mod preview;
 mod sections;
 mod table;
 pub mod theme;
 
-use ae3_core::{AssetKind, EntityKind};
+use ae3_core::AssetKind;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::app::Ae3App;
 use crate::model::Tab;
 use crate::model::release::ReleaseVersion;
 
-/// A small glyph for each Asset kind. They come from the Hack font that
-/// egui already embeds (see [`theme::fonts`]), so no emoji font is
-/// linked into the binary.
-#[must_use]
-pub fn glyph(kind: AssetKind) -> &'static str {
-    match kind {
-        AssetKind::Texture => "▣",
-        AssetKind::Atlas => "▦",
-        AssetKind::Sprite => "◪",
-        AssetKind::Text => "¶",
-        AssetKind::Structured => "≡",
-        AssetKind::Mesh => "▲",
-        AssetKind::Audio => "♪",
-        AssetKind::Other => "○",
-    }
+/// A button showing `icon` before `text`, named `text` for screen readers.
+pub fn icon_button(ui: &mut egui::Ui, icon: &str, text: &str) -> egui::Response {
+    ui.button(icons::with(icon, text)).accessible_name(text)
 }
 
-/// A small glyph for each kind of Game Entity, from the same fonts as
-/// [`glyph`].
-#[must_use]
-pub fn entity_glyph(kind: EntityKind) -> &'static str {
-    match kind {
-        EntityKind::Unit => "◉",
-        EntityKind::Ability => "❖",
-        EntityKind::Gear => "⊛",
-        EntityKind::Material => "◊",
-        EntityKind::PlayerPortrait => "◙",
-    }
+/// A small icon-only button named `name` for screen readers.
+pub fn small_icon_button(ui: &mut egui::Ui, icon: &str, name: &str) -> egui::Response {
+    ui.small_button(icon)
+        .on_hover_text(name)
+        .accessible_name(name)
 }
 
 /// Installs the fonts and the light and dark styles; see [`theme`].
@@ -99,7 +82,7 @@ fn release_notice(app: &mut Ae3App, ui: &mut egui::Ui) {
     ui.separator();
     ui.hyperlink_to(format!("{} v{version} available", crate::APP_NAME), url)
         .on_hover_text("Open the release page to download it");
-    if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+    if small_icon_button(ui, icons::CLOSE, "Dismiss release notice").clicked() {
         app.dismiss_release();
     }
 }
@@ -128,7 +111,7 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
             if let Some(notice) = app.model.notice.clone() {
                 ui.separator();
                 warn_label(ui, notice);
-                if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                if small_icon_button(ui, icons::CLOSE, "Dismiss notice").clicked() {
                     app.model.notice = None;
                 }
             }
@@ -155,36 +138,4 @@ pub fn show(app: &mut Ae3App, ui: &mut egui::Ui) {
     });
     detail::window(app, ui.ctx());
     about::window(app, ui.ctx());
-}
-
-#[cfg(test)]
-mod tests {
-    use eframe::egui::{FontId, RawInput};
-
-    use super::*;
-
-    /// Every glyph must render with the bundled fonts; a missing glyph
-    /// would show as a box.
-    #[test]
-    fn glyphs_exist_in_the_default_fonts() {
-        let ctx = egui::Context::default();
-        install(&ctx);
-        let mut output = ctx.run_ui(RawInput::default(), |_| {});
-        output.textures_delta.clear();
-        for kind in AssetKind::ALL {
-            let g = glyph(kind);
-            let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), g));
-            assert!(ok, "no glyph for {kind}: {g}");
-        }
-        for kind in EntityKind::ALL {
-            let g = entity_glyph(kind);
-            let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), g));
-            assert!(ok, "no glyph for {kind}: {g}");
-        }
-        // Symbols the UI uses besides the kind glyphs.
-        for extra in ["×", "▶", "■", "↻", "▴", "▾", "…", "—", "●"] {
-            let ok = ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(14.0), extra));
-            assert!(ok, "no glyph {extra}");
-        }
-    }
 }

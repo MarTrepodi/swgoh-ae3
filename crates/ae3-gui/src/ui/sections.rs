@@ -8,7 +8,7 @@ use ae3_core::Platform;
 use ae3_core::config::{AudioFormat, ImageFormat, Layout, MeshFormat, StructuredMode};
 use eframe::egui::{self, RichText};
 
-use super::{entity_glyph, error_label, warn_label};
+use super::{error_label, icons, small_icon_button, warn_label};
 use crate::app::{Ae3App, SettingChange};
 use crate::model::jobs::JobPhase;
 use crate::model::names::{EntityMatch, NamesState};
@@ -105,7 +105,7 @@ pub fn manifest(app: &mut Ae3App, ui: &mut egui::Ui) {
                 app.model.version_text = newer.to_string();
                 app.load_manifest(Some(newer));
             }
-            if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+            if small_icon_button(ui, icons::CLOSE, "Dismiss Asset Version notice").clicked() {
                 app.model.update.dismiss();
             }
         }
@@ -323,11 +323,7 @@ pub fn search(app: &mut Ae3App, ui: &mut egui::Ui) {
             app.set_query(query);
         }
         if !app.model.query.is_empty()
-            && ui
-                .small_button("×")
-                .on_hover_text("Clear")
-                .accessible_name("Clear search")
-                .clicked()
+            && small_icon_button(ui, icons::CLOSE, "Clear search").clicked()
         {
             app.set_query(String::new());
         }
@@ -398,9 +394,14 @@ fn entities(app: &mut Ae3App, ui: &mut egui::Ui) {
             for entity in &search.entities[..shown] {
                 let on = picked_key.is_some_and(|k| entity.is(k));
                 let n = entity.bundles.len();
-                let text = format!("{} {} · {n}", entity_glyph(entity.kind), entity.label());
+                let name = format!("{} {} · {n}", entity.kind.label(), entity.label());
+                let text = icons::with(
+                    icons::entity(entity.kind),
+                    &format!("{} · {n}", entity.label()),
+                );
                 let response = ui
                     .add_enabled(n > 0, egui::Button::selectable(on, text))
+                    .accessible_name(name)
                     .on_hover_ui(|ui| {
                         ui.label(entity_tooltip(entity));
                     })
@@ -465,12 +466,19 @@ fn index_progress(app: &mut Ae3App, ui: &mut egui::Ui) {
                 );
                 ui.label(label);
                 let paused = app.index_pause_requested();
-                let (text, tip) = if paused {
-                    ("▶ Resume", "Continue building the Asset Index")
+                let (icon, text, tip) = if paused {
+                    (icons::PLAY, "Resume", "Continue building the Asset Index")
                 } else {
-                    ("Pause", "Stop fetching for now; progress is kept")
+                    (
+                        icons::PAUSE,
+                        "Pause",
+                        "Stop fetching for now; progress is kept",
+                    )
                 };
-                if ui.button(text).on_hover_text(tip).clicked() {
+                if super::icon_button(ui, icon, text)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     app.toggle_index_pause();
                 }
             });
@@ -479,7 +487,7 @@ fn index_progress(app: &mut Ae3App, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.add_space(SECTION_WIDTH + ui.spacing().item_spacing.x);
                 error_label(ui, format!("Asset Index build failed: {e}"));
-                if ui.button("↻ Retry").clicked() {
+                if super::icon_button(ui, icons::RETRY, "Retry").clicked() {
                     app.restart_index();
                 }
             });
@@ -498,7 +506,7 @@ fn index_progress(app: &mut Ae3App, ui: &mut egui::Ui) {
                             c.pending_bundles()
                         ),
                     );
-                    if ui.button("↻ Retry").clicked() {
+                    if super::icon_button(ui, icons::RETRY, "Retry").clicked() {
                         app.restart_index();
                     }
                 });

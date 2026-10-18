@@ -2297,7 +2297,8 @@ mod tests {
         let generation = app.preview_generation.load(Ordering::Relaxed);
         app.preview_opened(generation, Ok(Opened::Audio { package, sounds }));
         let texts = painted_texts(&ctx, &mut app);
-        assert!(texts.iter().any(|t| t == "▶ Play"), "{texts:?}");
+        let play = crate::ui::icons::with(crate::ui::icons::PLAY, "Play");
+        assert!(texts.contains(&play), "{texts:?}");
         assert!(texts.iter().any(|t| t == "can't play"), "{texts:?}");
         assert_eq!(
             app.playback.state(SoundRef::Sound(opus)),
@@ -2325,7 +2326,8 @@ mod tests {
             "{played:?}"
         );
         let texts = painted_texts(&ctx, &mut app);
-        assert!(texts.iter().any(|t| t == "■ Stop"), "{texts:?}");
+        let stop = crate::ui::icons::with(crate::ui::icons::STOP, "Stop");
+        assert!(texts.contains(&stop), "{texts:?}");
         assert!(
             settled_repaint_delay(&ctx, &mut app) >= IDLE,
             "playing schedules no repaint; the end report wakes the UI"

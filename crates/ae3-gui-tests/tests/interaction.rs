@@ -247,18 +247,18 @@ fn typing_a_search_filters_the_bundles_table() {
 fn the_type_filter_shows_only_packages_holding_that_kind() {
     let (_dir, _cdn, mut h) = synthetic_window("type-filter");
     let names = ["charui_testpilot", "audio_test_ui", "audio_test_music"];
-    let audio = h.get_by_label("♪ Audio");
+    let audio = h.get_by_label("Audio");
     assert_eq!(audio.accesskit_node().toggled(), Some(Toggled::False));
-    click(&mut h, "♪ Audio");
+    click(&mut h, "Audio");
     assert_eq!(
-        h.get_by_label("♪ Audio").accesskit_node().toggled(),
+        h.get_by_label("Audio").accesskit_node().toggled(),
         Some(Toggled::True)
     );
     assert_eq!(shown(&h, &names), ["audio_test_ui", "audio_test_music"]);
     h.get_by_label("2 of 9 Packages");
 
     // Bundles whose contents are not known yet are hidden by any filter.
-    click(&mut h, "▣ Texture");
+    click(&mut h, "Texture");
     assert_eq!(shown(&h, &names), ["audio_test_ui", "audio_test_music"]);
     click(&mut h, "All");
     assert_eq!(shown(&h, &names), names);
@@ -672,7 +672,7 @@ fn audio_package_sounds_play_and_stop() {
         .set_audio_output(Box::new(recorder.clone()));
     assert_eq!(
         play_button(&h, &stem).accesskit_node().label().as_deref(),
-        Some("▶ Play")
+        Some("Play")
     );
     play_button(&h, &stem).click();
     let sound = SoundRef::Sound(index);
@@ -685,7 +685,7 @@ fn audio_package_sounds_play_and_stop() {
     ));
     assert_eq!(
         play_button(&h, &stem).accesskit_node().label().as_deref(),
-        Some("■ Stop")
+        Some("Stop")
     );
     play_button(&h, &stem).click();
     h.run_ok();
@@ -923,7 +923,7 @@ fn a_newer_ae3_release_is_announced_and_can_be_dismissed() {
 
     let link = h.get_by_label("swgoh-ae3 v99.0.0 available");
     assert_eq!(link.accesskit_node().role(), Role::Link);
-    click(&mut h, "×");
+    click(&mut h, "Dismiss release notice");
     assert!(h.query_by_label("swgoh-ae3 v99.0.0 available").is_none());
     let saved = dir.path().join("cache").join(ReleaseState::FILE);
     wait_for(&mut h, "the dismissal to be saved", |_| {

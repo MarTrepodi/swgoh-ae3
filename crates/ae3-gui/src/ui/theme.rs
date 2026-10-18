@@ -174,6 +174,7 @@ const UBUNTU_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/Ubuntu-Medium.tt
 const REGULAR: &str = "Ubuntu-Regular";
 const MEDIUM: &str = "Ubuntu-Medium";
 const HACK: &str = "Hack";
+const ICONS: &str = super::icons::FONT_NAME;
 
 /// The family of Ubuntu Medium, for headings, buttons and emphasis.
 #[must_use]
@@ -188,9 +189,10 @@ pub fn medium_font(size: f32) -> FontId {
 }
 
 /// The fonts the window draws with: Ubuntu Regular for proportional text,
-/// Ubuntu Medium as a named family, Hack for monospace. Hack is also the
-/// last fallback of the Ubuntu families, for the arrows and geometric
-/// shapes Ubuntu lacks.
+/// Ubuntu Medium as a named family, Hack for monospace. The Phosphor icons
+/// ([`super::icons`]) follow Ubuntu in each family, ahead of Hack, whose
+/// Powerline symbols share codepoints with some icons. Hack is the last
+/// fallback, for the arrows and geometric shapes Ubuntu lacks.
 #[must_use]
 pub fn fonts() -> FontDefinitions {
     let mut fonts = FontDefinitions::empty();
@@ -203,14 +205,19 @@ pub fn fonts() -> FontDefinitions {
             .font_data
             .insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     }
+    fonts
+        .font_data
+        .insert(ICONS.to_owned(), Arc::new(super::icons::font()));
     let family = |names: &[&str]| names.iter().map(|&n| n.to_owned()).collect::<Vec<_>>();
     fonts
         .families
-        .insert(FontFamily::Proportional, family(&[REGULAR, HACK]));
-    fonts.families.insert(medium(), family(&[MEDIUM, HACK]));
+        .insert(FontFamily::Proportional, family(&[REGULAR, ICONS, HACK]));
     fonts
         .families
-        .insert(FontFamily::Monospace, family(&[HACK, REGULAR]));
+        .insert(medium(), family(&[MEDIUM, ICONS, HACK]));
+    fonts
+        .families
+        .insert(FontFamily::Monospace, family(&[HACK, REGULAR, ICONS]));
     fonts
 }
 

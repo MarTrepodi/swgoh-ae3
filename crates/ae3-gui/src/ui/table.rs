@@ -7,7 +7,7 @@ use ae3_core::{AssetKinds, PackageKind};
 use eframe::egui::{self, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
-use super::{glyph, kind_label};
+use super::{icons, kind_label};
 use crate::app::Ae3App;
 use crate::model::selection::ClickModifiers;
 use crate::model::table::{SHOWN_KINDS, SortKey, format_bytes};
@@ -18,7 +18,7 @@ pub const ROW_HEIGHT: f32 = 20.0;
 pub fn kinds_text(kind: PackageKind, kinds: Option<AssetKinds>) -> String {
     match (kind, kinds) {
         (_, Some(k)) if k.is_empty() => "—".to_owned(),
-        (_, Some(k)) => k.iter().map(super::glyph).collect::<Vec<_>>().join(" "),
+        (_, Some(k)) => k.iter().map(icons::kind).collect::<Vec<_>>().join(" "),
         (PackageKind::Other(_), None) => "?".to_owned(),
         (_, None) => "…".to_owned(),
     }
@@ -46,9 +46,10 @@ fn type_filter(app: &mut Ae3App, ui: &mut egui::Ui) {
         let mut changed = false;
         for kind in SHOWN_KINDS {
             let on = app.model.filter.kinds.contains(kind);
-            let text = format!("{} {}", glyph(kind), kind_label(kind));
+            let text = icons::with(icons::kind(kind), kind_label(kind));
             if ui
                 .selectable_label(on, text)
+                .accessible_name(kind_label(kind))
                 .on_hover_text(format!("Only Packages holding {} Assets", kind_label(kind)))
                 .clicked()
             {
@@ -88,13 +89,16 @@ fn type_filter(app: &mut Ae3App, ui: &mut egui::Ui) {
 fn header_button(ui: &mut egui::Ui, app: &mut Ae3App, title: &str, key: SortKey) {
     let sort = app.model.sort;
     let arrow = match (sort.key == key, sort.descending) {
-        (true, false) => " ▴",
-        (true, true) => " ▾",
+        (true, false) => icons::SORT_UP,
+        (true, true) => icons::SORT_DOWN,
         _ => "",
     };
-    let response = ui.add(
-        egui::Label::new(RichText::new(format!("{title}{arrow}")).strong()).sense(Sense::click()),
-    );
+    let response = ui
+        .add(
+            egui::Label::new(RichText::new(format!("{title} {arrow}")).strong())
+                .sense(Sense::click()),
+        )
+        .accessible_name(title);
     if response.clicked() {
         app.model.sort.click(key);
         app.model.refresh_visible();
@@ -189,7 +193,10 @@ mod tests {
     #[test]
     fn types_cell_text() {
         let kinds: AssetKinds = [AssetKind::Texture, AssetKind::Atlas].into_iter().collect();
-        assert_eq!(kinds_text(PackageKind::Bundle, Some(kinds)), "▣ ▦");
+        assert_eq!(
+            kinds_text(PackageKind::Bundle, Some(kinds)),
+            format!("{} {}", icons::TEXTURE, icons::ATLAS)
+        );
         assert_eq!(kinds_text(PackageKind::Bundle, None), "…");
         assert_eq!(
             kinds_text(PackageKind::Bundle, Some(AssetKinds::EMPTY)),
