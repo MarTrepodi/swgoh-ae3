@@ -153,6 +153,7 @@ pub fn run(report_path: &Path) -> i32 {
             *context.lock().unwrap_or_else(PoisonError::into_inner) = Some(cc.egui_ctx.clone());
             // No settings path: the run never saves the user's settings.
             let mut app = Ae3App::new(&cc.egui_ctx, config, file, None, notice);
+            app.install_menu(&cc.egui_ctx);
             app.set_index_on_load(false);
             Ok(Box::new(Smoke {
                 app,
@@ -447,6 +448,10 @@ impl eframe::App for Smoke {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.app.raw_input_hook(ctx, raw_input);
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {

@@ -1,6 +1,7 @@
 //! The About window: the icon, name and version, where the project lives,
 //! and a "Check for updates" button that asks GitHub straight away. The
-//! header's About button opens it.
+//! header's About button opens it, and on macOS so does the menu bar's
+//! "About swgoh-ae3" ([`crate::menu`]).
 
 use eframe::egui::{self, RichText, vec2};
 

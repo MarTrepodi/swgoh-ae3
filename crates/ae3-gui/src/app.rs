@@ -124,6 +124,13 @@ pub struct Ae3App {
     app_icon: Option<TextureHandle>,
     max_texture_side: u32,
     pub last_load_error: Option<String>,
+    /// What the macOS menu bar asked for, drained before each frame.
+    menu_inbox: crate::menu::Inbox,
+    /// What the menu asked of this frame besides input: a paste.
+    menu_requests: crate::menu::Requests,
+    /// The macOS menu bar, kept alive with the window.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<crate::menu::Native>,
 }
 
 impl Ae3App {
@@ -203,6 +210,10 @@ impl Ae3App {
             app_icon: None,
             max_texture_side: 2048,
             last_load_error: None,
+            menu_inbox: crate::menu::Inbox::default(),
+            menu_requests: crate::menu::Requests::default(),
+            #[cfg(target_os = "macos")]
+            native_menu: None,
         }
     }
 
@@ -216,6 +227,39 @@ impl Ae3App {
         if self.config.check_for_updates {
             self.start_release_check();
         }
+    }
+
+    /// Builds the macOS menu bar, whose About item opens the About window
+    /// ([`crate::menu`]). Does nothing elsewhere; tests leave it out. Call
+    /// from eframe's app creator, on the main thread.
+    pub fn install_menu(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        match crate::menu::install(ctx, self.menu_inbox.clone()) {
+            Ok(menu) => self.native_menu = Some(menu),
+            Err(e) => self.model.notice = Some(format!("The menu bar could not be built: {e}")),
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = ctx;
+    }
+
+    /// Where the menu bar's commands arrive; tests push to it as the menu
+    /// would.
+    #[must_use]
+    pub fn menu_inbox(&self) -> &crate::menu::Inbox {
+        &self.menu_inbox
+    }
+
+    /// Applies the menu's commands to the input of the frame about to run.
+    pub fn take_menu_commands(&mut self, raw_input: &mut egui::RawInput) {
+        let commands = self.menu_inbox.take();
+        if commands.is_empty() {
+            return;
+        }
+        let requests = crate::menu::apply(&commands, raw_input);
+        if requests.about {
+            self.model.windows.about = true;
+        }
+        self.menu_requests.paste |= requests.paste;
     }
 
     // ---- Seams for tests and the smoke run -----------------------------
@@ -1335,6 +1379,12 @@ impl Ae3App {
 impl Ae3App {
     /// The per-frame work outside drawing: messages, timers, saving.
     fn tick(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.menu_requests.paste) {
+            // The integration reads the clipboard and delivers it as a
+            // paste next frame.
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ctx.request_repaint();
+        }
         while let Ok(msg) = self.inbox.try_recv() {
             self.handle(ctx, msg);
         }
@@ -1385,6 +1435,10 @@ impl eframe::App for Ae3App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.take_menu_commands(raw_input);
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {

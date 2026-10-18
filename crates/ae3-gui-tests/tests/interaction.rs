@@ -949,6 +949,24 @@ fn a_newer_ae3_release_is_announced_and_can_be_dismissed() {
     });
 }
 
+/// The macOS menu bar's "About swgoh-ae3" opens the app's About window, not
+/// the system's standard panel.
+#[test]
+fn the_menu_bar_about_item_opens_the_about_window() {
+    use ae3_gui::menu::Command;
+
+    let dir = TempDir::new("menu-about");
+    let mut h = harness(Spec::new(dir.path(), FakeCdn::offline().net()));
+    assert!(h.query_by_label("Check for updates").is_none());
+    h.state().app().menu_inbox().push(Command::About);
+    // As eframe hands each frame's input to the app before running it.
+    let mut input = eframe::egui::RawInput::default();
+    h.state_mut().app_mut().take_menu_commands(&mut input);
+    h.run_ok();
+    h.get_by_label("About swgoh-ae3");
+    h.get_by_label("Check for updates");
+}
+
 #[test]
 fn about_shows_the_version_and_checks_for_updates_on_request() {
     use ae3_gui::model::release::{CURRENT, ManualCheck, REPOSITORY, latest_release_api};
