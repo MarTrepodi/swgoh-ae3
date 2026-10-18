@@ -13,11 +13,14 @@ ae3-core.workspace = true
 eframe = { workspace = true, features = [
     "accesskit",
     "clipboard",
-    "default_fonts",
     "glow",
     "wayland",
     "x11",
 ] }
+# Hack, egui's monospace font, for paths and code. eframe's `default_fonts`
+# is off: it would also embed Ubuntu Light, which the theme replaces with
+# Ubuntu Regular and Medium (assets/fonts/, src/ui/theme.rs).
+epaint_default_fonts = "0.37"
 # Only the table widget; no image loaders, no mime guessing.
 egui_extras = { version = "0.37", default-features = false }
 # Decodes the embedded application icon; the same png that ae3-image uses.
@@ -75,6 +78,7 @@ include = [
     "../../README.md",
     "../../CHANGELOG.md",
     "../ae3-audio/THIRD-PARTY-NOTICES.md",
+    "FONT-NOTICES.md",
     "../../THIRD-PARTY-LICENSES.md",
     "../../packaging/linux/ae3-gui.desktop",
     "../../packaging/icons/swgoh-ae3.png",

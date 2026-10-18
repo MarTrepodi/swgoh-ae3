@@ -427,7 +427,7 @@ pub fn view(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "This Mesh has no triangles",
-            egui::FontId::proportional(super::text_size(14.0)),
+            egui::FontId::proportional(super::theme::size::BODY),
             ui.visuals().weak_text_color(),
         );
         return;

@@ -7,7 +7,7 @@ use ae3_core::AssetInfo;
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, vec2};
 use egui_extras::{Column, TableBuilder};
 
-use super::{error_label, glyph, kind_label, match_color, text_size};
+use super::{error_label, glyph, kind_label, match_color};
 use crate::app::Ae3App;
 use crate::model::playback::{PlayState, SoundRef};
 use crate::model::preview::{PreviewStatus, has_image, summary};
@@ -16,6 +16,8 @@ use crate::model::table::format_bytes;
 const CELL_W: f32 = 124.0;
 const CELL_H: f32 = 166.0;
 const THUMB: f32 = 112.0;
+/// The size of a cell's checkbox.
+const CHECK: f32 = 18.0;
 
 pub fn pane(app: &mut Ae3App, ui: &mut egui::Ui) {
     let Some(preview) = &app.model.preview else {
@@ -228,7 +230,7 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
         let line = |text: String, size: f32, color: Color32| {
             let mut job = egui::text::LayoutJob::simple_singleline(
                 text,
-                egui::FontId::proportional(text_size(size)),
+                egui::FontId::proportional(size),
                 color,
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(text_rect.width());
@@ -236,12 +238,16 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
         };
         painter.galley(
             text_rect.min,
-            line(name, 12.0, visuals.text_color()),
+            line(name, 13.0, visuals.text_color()),
             visuals.text_color(),
         );
         painter.galley(
-            egui::pos2(text_rect.min.x, text_rect.min.y + text_size(12.0) + 4.0),
-            line(summary(asset), 10.5, visuals.weak_text_color()),
+            egui::pos2(text_rect.min.x, text_rect.min.y + 17.0),
+            line(
+                summary(asset),
+                super::theme::size::SMALL,
+                visuals.weak_text_color(),
+            ),
             visuals.weak_text_color(),
         );
     }
@@ -249,9 +255,11 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     // goes in a child Ui so it does not move the row's cursor: `ui.put`
     // would advance the cursor to just after the checkbox, and the next
     // cell would then be drawn over this one.
-    let check_rect = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(18.0, 18.0));
-    if ui
-        .new_child(egui::UiBuilder::new().max_rect(check_rect))
+    let check_rect = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(CHECK, CHECK));
+    let mut check_ui = ui.new_child(egui::UiBuilder::new().max_rect(check_rect));
+    // A checkbox is as tall as a button; this one fits the corner.
+    check_ui.spacing_mut().interact_size.y = CHECK;
+    if check_ui
         .add(egui::Checkbox::without_text(&mut checked))
         .accessible_name(format!("Extract {}", asset.display_name()))
         .changed()

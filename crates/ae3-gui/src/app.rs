@@ -151,7 +151,7 @@ impl Ae3App {
         notice: Option<String>,
         services: Services,
     ) -> Self {
-        crate::ui::install_fonts(ctx);
+        crate::ui::install(ctx);
         let repaint = ctx.clone();
         let (outbox, inbox) = Outbox::new(move || repaint.request_repaint());
         let ended = outbox.clone();

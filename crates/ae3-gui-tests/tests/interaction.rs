@@ -38,6 +38,15 @@ fn click(h: &mut H, label: &str) {
     h.run_ok();
 }
 
+/// Scrolls the widget labelled `label` into view, as a user would, and
+/// clicks it.
+#[track_caller]
+fn scroll_and_click(h: &mut H, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run_ok();
+    click(h, label);
+}
+
 /// The text field labelled `label`.
 #[track_caller]
 fn text_field<'a>(h: &'a H, label: &'a str) -> egui_kittest::Node<'a> {
@@ -359,8 +368,8 @@ fn a_fixture_bundle_previews_with_thumbnails_and_extracts_checked_assets() {
             .toggled()
     };
     assert_eq!(check(&h, "bossk_tex"), Some(Toggled::False));
-    click(&mut h, "Extract bossk_tex");
-    click(&mut h, "Extract rfl_bossk_tex");
+    scroll_and_click(&mut h, "Extract bossk_tex");
+    scroll_and_click(&mut h, "Extract rfl_bossk_tex");
     assert_eq!(check(&h, "bossk_tex"), Some(Toggled::True));
     h.get_by_label("2 checked");
 

@@ -394,7 +394,7 @@ pub fn harness_from(
         .with_step_dt(1.0 / 60.0)
         .with_max_steps(12)
         // The fonts AE3 draws with, before the first layout.
-        .with_context_setup(ae3_gui::ui::install_fonts);
+        .with_context_setup(ae3_gui::ui::install);
     // Snapshots show the window, not the test's pointer.
     #[cfg(feature = "snapshots")]
     let builder = builder.with_render_cursor(false);

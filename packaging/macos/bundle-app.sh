@@ -46,7 +46,7 @@ codesign --force --sign - --timestamp=none "$app"
 codesign --verify --strict --verbose=2 "$app"
 
 cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md \
-  crates/ae3-audio/THIRD-PARTY-NOTICES.md "$stage/"
+  crates/ae3-audio/THIRD-PARTY-NOTICES.md crates/ae3-gui/FONT-NOTICES.md "$stage/"
 
 # ditto keeps the bundle's symlinks, permissions and signature intact.
 rm -f "$out/$name.zip"

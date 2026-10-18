@@ -11,6 +11,7 @@ pub mod mesh;
 mod preview;
 mod sections;
 mod table;
+pub mod theme;
 
 use ae3_core::{AssetKind, EntityKind};
 use eframe::egui::{self, Color32, RichText};
@@ -20,7 +21,7 @@ use crate::model::Tab;
 use crate::model::release::ReleaseVersion;
 
 /// A small glyph for each Asset kind. They come from the Hack font that
-/// egui already embeds (see [`install_fonts`]), so no emoji font is
+/// egui already embeds (see [`theme::fonts`]), so no emoji font is
 /// linked into the binary.
 #[must_use]
 pub fn glyph(kind: AssetKind) -> &'static str {
@@ -49,32 +50,9 @@ pub fn entity_glyph(kind: EntityKind) -> &'static str {
     }
 }
 
-/// How much larger than egui's defaults AE3 draws text: body text is 15
-/// points instead of 12.5.
-pub const TEXT_SCALE: f32 = 1.2;
-
-/// A font size of `base` points at AE3's text scale, for text painted
-/// directly rather than through a text style.
-#[must_use]
-pub fn text_size(base: f32) -> f32 {
-    base * TEXT_SCALE
-}
-
-/// Lets proportional text fall back to Hack, egui's embedded monospace
-/// font, which has the geometric shapes the glyphs use. egui 0.37 ships
-/// its emoji fonts only behind a feature that would add about 740 KB.
-/// Also enlarges every text style by [`TEXT_SCALE`].
-pub fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        family.push("Hack".to_owned());
-    }
-    ctx.set_fonts(fonts);
-    ctx.all_styles_mut(|style| {
-        for font in style.text_styles.values_mut() {
-            font.size = text_size(font.size);
-        }
-    });
+/// Installs the fonts and the light and dark styles; see [`theme`].
+pub fn install(ctx: &egui::Context) {
+    theme::install(ctx);
 }
 
 /// A capitalised kind name for labels.
@@ -185,30 +163,12 @@ mod tests {
 
     use super::*;
 
-    /// Text is drawn larger than egui's defaults.
-    #[test]
-    fn text_styles_are_enlarged() {
-        let ctx = egui::Context::default();
-        let body = |theme| ctx.style_of(theme).text_styles[&egui::TextStyle::Body].size;
-        let themes = [egui::Theme::Dark, egui::Theme::Light];
-        let before = themes.map(body);
-        install_fonts(&ctx);
-        for (theme, before) in themes.into_iter().zip(before) {
-            let after = body(theme);
-            assert!(
-                (after - before * TEXT_SCALE).abs() < 1e-3,
-                "{before} -> {after}"
-            );
-            assert!(after >= 15.0, "body text is {after} points");
-        }
-    }
-
     /// Every glyph must render with the bundled fonts; a missing glyph
     /// would show as a box.
     #[test]
     fn glyphs_exist_in_the_default_fonts() {
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        install(&ctx);
         let mut output = ctx.run_ui(RawInput::default(), |_| {});
         output.textures_delta.clear();
         for kind in AssetKind::ALL {

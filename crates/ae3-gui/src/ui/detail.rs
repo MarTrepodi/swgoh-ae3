@@ -267,7 +267,7 @@ fn canvas(
             rect.left_bottom() + vec2(6.0, -6.0),
             egui::Align2::LEFT_BOTTOM,
             text,
-            egui::FontId::monospace(super::text_size(11.0)),
+            egui::FontId::monospace(super::theme::size::SMALL),
             ui.visuals().strong_text_color(),
         );
     }
@@ -484,7 +484,7 @@ fn text_view(ui: &mut egui::Ui, text: &str, extension: &str, truncated: bool) {
     });
     let dark = ui.visuals().dark_mode;
     let plain = ui.visuals().text_color();
-    let font = egui::FontId::monospace(super::text_size(12.0));
+    let font = egui::FontId::monospace(super::theme::size::MONO);
     let mut job = egui::text::LayoutJob::default();
     for (range, kind) in tokenize(text, language) {
         job.append(
