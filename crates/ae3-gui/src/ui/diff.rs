@@ -1,120 +1,117 @@
-//! The Diff tab: compare two Asset Versions and extract what changed.
+//! The Diff tab: compare two Asset Versions and extract what changed. The
+//! action bar carries the extractions.
 
 use ae3_core::DiffFilter;
 use eframe::egui::{self, RichText, Sense};
 use egui_extras::{Column, TableBuilder};
 
-use super::table::{ROW_HEIGHT, click_modifiers};
-use super::{error_label, warn_label};
+use super::table::{HEADER_HEIGHT, ROW_HEIGHT, click_modifiers, column_title, empty_state};
+use super::widgets::{self, Tone};
+use super::{icons, theme};
 use crate::app::Ae3App;
-use crate::model::diff::{can_extract, engine_rebuild_warning, summary_line};
+use crate::model::diff::{Change, engine_rebuild_warning};
 use crate::model::jobs::JobPhase;
 use crate::model::table::format_bytes;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "lays out one widget in drawing order"
-)]
 pub fn tab(app: &mut Ae3App, ui: &mut egui::Ui) {
-    let loaded = app.model.asset_version();
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Old Asset Version");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.model.diff.old_text)
-                .desired_width(72.0)
-                .hint_text("100052"),
-        )
-        .accessible_name("Old Asset Version");
-        ui.label("New Asset Version");
-        ui.add(
-            egui::TextEdit::singleline(&mut app.model.diff.new_text)
-                .desired_width(72.0)
-                .hint_text(loaded.map_or_else(|| "loaded".to_owned(), |v| v.to_string())),
-        )
-        .accessible_name("New Asset Version");
-        let busy = app.model.diff.job.is_active();
-        if ui
-            .add_enabled(!busy && loaded.is_some(), egui::Button::new("Compare"))
-            .on_hover_text("Download both Manifests and list what was added, changed or removed")
-            .clicked()
-        {
-            app.compute_diff();
-        }
-        if busy {
-            ui.spinner();
-            ui.label("Fetching Manifests…");
-        }
-        if let JobPhase::Failed(e) = app.model.diff.job.phase() {
-            error_label(ui, e.clone());
-        }
-    });
+    widgets::card(ui, |ui| compare(app, ui));
+    ui.add_space(8.0);
     let Some(diff) = app.model.diff.diff.clone() else {
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(
+        widgets::card_frame(ui).show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            empty_state(
+                ui,
+                icons::DIFF,
+                "Nothing compared yet",
                 "Enter an older Asset Version to see the Packages added, changed or removed since.",
-            )
-            .weak(),
-        );
+            );
+        });
         return;
     };
     ui.horizontal_wrapped(|ui| {
         let mut filter = app.model.diff.filter;
-        for f in DiffFilter::ALL {
+        let labels = DiffFilter::ALL.map(|f| {
             let label = match f {
                 DiffFilter::Added => format!("Added ({})", diff.added.len()),
                 DiffFilter::Changed => format!("Changed ({})", diff.changed.len()),
                 DiffFilter::All => format!("All ({})", diff.added.len() + diff.changed.len()),
                 DiffFilter::Removed => format!("Removed ({})", diff.removed.len()),
             };
-            ui.selectable_value(&mut filter, f, label);
-        }
+            (f, label)
+        });
+        let options: Vec<_> = labels
+            .iter()
+            .map(|(f, label)| (*f, None, label.as_str()))
+            .collect();
+        widgets::segmented(ui, &mut filter, &options, false);
         app.model.diff.set_filter(filter);
-        ui.separator();
-        ui.label(summary_line(&diff));
     });
     if let Some(warning) = engine_rebuild_warning(&diff) {
-        warn_label(ui, warning);
+        widgets::status(ui, Tone::Warning, warning);
     }
-    let filter = app.model.diff.filter;
-    ui.horizontal(|ui| {
-        let selected = app.model.diff.selection.len();
-        let total = app.model.diff.rows.len();
-        let extracting = app.model.extract_job.is_active();
-        let enabled = can_extract(filter) && !extracting;
-        if ui
-            .add_enabled(
-                enabled && selected > 0,
-                egui::Button::new(format!("Extract Selected ({selected})")),
+    ui.add_space(4.0);
+    widgets::card_frame(ui)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            table(app, ui);
+        });
+}
+
+/// The two Asset Versions and Compare.
+fn compare(app: &mut Ae3App, ui: &mut egui::Ui) {
+    let loaded = app.model.asset_version();
+    let busy = app.model.diff.job.is_active();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.vertical(|ui| {
+            widgets::group_label(ui, "Old Asset Version");
+            ui.add(
+                egui::TextEdit::singleline(&mut app.model.diff.old_text)
+                    .desired_width(110.0)
+                    .hint_text("100052"),
             )
-            .clicked()
-            && let Some(request) = app.model.diff.request(true)
-        {
-            app.extract(request, true);
-        }
-        if ui
-            .add_enabled(
-                enabled && total > 0,
-                egui::Button::new(format!("Extract All ({total})")),
+            .accessible_name("Old Asset Version");
+        });
+        ui.vertical(|ui| {
+            widgets::group_label(ui, "New Asset Version");
+            ui.add(
+                egui::TextEdit::singleline(&mut app.model.diff.new_text)
+                    .desired_width(110.0)
+                    .hint_text(loaded.map_or_else(|| "loaded".to_owned(), |v| v.to_string())),
             )
-            .on_hover_text(format!(
-                "{} to download",
-                format_bytes(diff.download_size(filter))
-            ))
-            .clicked()
-            && let Some(request) = app.model.diff.request(false)
-        {
-            app.extract(request, true);
-        }
-        if !can_extract(filter) {
-            ui.label(
-                RichText::new("Removed Packages exist only in the older Asset Version.").weak(),
-            );
-        }
+            .accessible_name("New Asset Version");
+        });
+        ui.vertical(|ui| {
+            widgets::group_label(ui, " ");
+            if widgets::button(ui, Some(icons::DIFF), "Compare", !busy && loaded.is_some())
+                .on_hover_text(
+                    "Download both Manifests and list what was added, changed or removed",
+                )
+                .clicked()
+            {
+                app.compute_diff();
+            }
+        });
+        ui.vertical(|ui| {
+            widgets::group_label(ui, " ");
+            ui.horizontal(|ui| {
+                ui.set_min_height(ui.spacing().interact_size.y);
+                if busy {
+                    ui.spinner();
+                    widgets::muted(ui, "Fetching Manifests…");
+                } else if let JobPhase::Failed(e) = app.model.diff.job.phase() {
+                    widgets::status(ui, Tone::Error, e.clone());
+                }
+            });
+        });
     });
-    ui.separator();
+}
+
+fn table(app: &mut Ae3App, ui: &mut egui::Ui) {
     let mods = click_modifiers(ui);
     let mut clicked = None;
+    let p = theme::palette(ui);
     let rows = &app.model.diff.rows;
     let selection = &app.model.diff.selection;
     // A click on a cell's text selects its row. Selectable labels would
@@ -126,18 +123,20 @@ pub fn tab(app: &mut Ae3App, ui: &mut egui::Ui) {
         .sense(Sense::click())
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::initial(80.0))
+        .column(Column::initial(96.0))
         .column(Column::initial(84.0))
         .auto_shrink(false)
-        .header(ROW_HEIGHT, |mut h| {
+        .header(HEADER_HEIGHT, |mut h| {
             h.col(|ui| {
-                ui.strong("Name");
+                column_title(ui, "Name");
             });
             h.col(|ui| {
-                ui.strong("Change");
+                column_title(ui, "Change");
             });
             h.col(|ui| {
-                ui.strong("Size");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    column_title(ui, "Size");
+                });
             });
         })
         .body(|body| {
@@ -149,10 +148,17 @@ pub fn tab(app: &mut Ae3App, ui: &mut egui::Ui) {
                     ui.label(&r.name);
                 });
                 row.col(|ui| {
-                    ui.label(r.change.name());
+                    let color = match r.change {
+                        Change::Added => p.green,
+                        Change::Changed => p.amber,
+                        Change::Removed => p.red,
+                    };
+                    ui.label(RichText::new(r.change.name()).color(color));
                 });
                 row.col(|ui| {
-                    ui.label(format_bytes(r.size));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(format_bytes(r.size)).color(p.text_muted));
+                    });
                 });
                 if row.response().clicked() {
                     clicked = Some(i);

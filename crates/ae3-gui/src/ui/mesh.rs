@@ -386,9 +386,9 @@ pub fn view(
         if !preview.has_normals && preview.vertex_count > 0 {
             text.push_str(" · normals computed");
         }
-        ui.label(RichText::new(text).strong());
+        ui.label(RichText::new(text).family(super::theme::medium()));
         ui.separator();
-        if ui.button("Reset view").clicked() {
+        if super::widgets::button(ui, Some(super::icons::RESET), "Reset view", true).clicked() {
             *camera = OrbitCamera::default();
         }
         ui.label(
@@ -427,7 +427,7 @@ pub fn view(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             "This Mesh has no triangles",
-            egui::FontId::proportional(super::text_size(14.0)),
+            egui::FontId::proportional(super::theme::size::BODY),
             ui.visuals().weak_text_color(),
         );
         return;

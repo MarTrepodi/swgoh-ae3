@@ -61,6 +61,9 @@ fn window(name: &str, theme: Theme) -> (TempDir, H) {
     // A fixed path: the temporary directory's name changes every run.
     spec.config.output_dir = PathBuf::from("ae3-output");
     let mut h = harness_with(spec, SIZE, theme);
+    // Pinned: a release bumps the version, which must not change every
+    // screenshot that shows the header.
+    h.state_mut().app_mut().set_version_label("0.1.0");
     h.state_mut()
         .app_mut()
         .show_manifest(synthetic_manifest(VERSION))
@@ -101,6 +104,13 @@ fn select_for_preview(h: &mut H, name: &str) {
 /// between colours and fails the comparison across renderers (macOS Metal
 /// against Linux lavapipe); with gradients the same rounding costs a level.
 fn pattern(width: u32, height: u32, seed: u8) -> RgbaImage {
+    pattern_with(width, height, seed, true)
+}
+
+/// [`pattern`], optionally fully opaque: a snapshot about something drawn
+/// over a texture (Sprite outlines) leaves the checkerboard out, since its
+/// hard tile edges round differently on different GPUs.
+fn pattern_with(width: u32, height: u32, seed: u8, translucent: bool) -> RgbaImage {
     // Every value is reduced to 0..=255 before the conversion.
     let level = |value: u32| u8::try_from(value.min(255)).unwrap_or(u8::MAX);
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
@@ -108,12 +118,17 @@ fn pattern(width: u32, height: u32, seed: u8) -> RgbaImage {
     let shift = u32::from(seed) * 40;
     for y in 0..height {
         for x in 0..width {
-            let red = (255 * x / x_max + shift) % 256;
+            // Saturates rather than wrapping: a wrap is a hard edge.
+            let red = 255 * x / x_max + shift;
             let green = 255 * y / y_max;
             let blue = 255 - (255 * (x + y) / (x_max + y_max));
             // 160..255: transparency shows, but the checkerboard behind
             // the texture stays faint.
-            let alpha = 160 + 95 * x / x_max;
+            let alpha = if translucent {
+                160 + 95 * x / x_max
+            } else {
+                255
+            };
             pixels.extend_from_slice(&[level(red), level(green), level(blue), level(alpha)]);
         }
     }
@@ -197,6 +212,16 @@ fn main_window_dark() {
 #[test]
 fn main_window_light() {
     main_window(Theme::Light, "main_window_light");
+}
+
+#[test]
+fn settings_window() {
+    let (_dir, mut h) = window("settings", Theme::Dark);
+    app(&mut h).model.windows.settings = true;
+    h.hover_at(egui::pos2(1270.0, 790.0));
+    h.run_ok();
+    // The window's shadow edge differs by a few pixels between GPUs.
+    h.snapshot_options("settings_window", &options().max_failed_pixels(16));
 }
 
 #[test]
@@ -421,7 +446,7 @@ fn atlas_overlay_outlines_the_sprites() {
         asset(2, "unit_test_atlas", AssetKind::Atlas, "MonoBehaviour"),
         DetailContent::Atlas {
             atlas,
-            image: Some(detail_image(pattern(256, 128, 2))),
+            image: Some(detail_image(pattern_with(256, 128, 2, false))),
             error: None,
         },
     );

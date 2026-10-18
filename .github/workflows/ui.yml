@@ -121,7 +121,7 @@ jobs:
       - name: Install ALSA headers and lavapipe
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libasound2-dev mesa-vulkan-drivers libvulkan1 vulkan-tools
+          sudo apt-get install -y --no-install-recommends libasound2-dev mesa-vulkan-drivers libvulkan1 vulkan-tools imagemagick
       # The runner has no GPU. wgpu renders on lavapipe, Mesa's CPU Vulkan
       # driver; pointing the Vulkan loader at its ICD alone keeps any other
       # driver from being picked. The manifest's file name differs between
@@ -152,6 +152,17 @@ jobs:
         run: cargo test -p ae3-gui-tests --features snapshots --locked
       # A failing snapshot leaves <name>.new.png (what was rendered) and
       # <name>.diff.png (where it differs) next to the reference.
+      # Where each failing snapshot differs, in the log: the bounding box of
+      # the non-white pixels in its .diff.png (kittest draws differences on
+      # white), so a failure can be located without downloading the images.
+      - name: Locate snapshot differences
+        if: failure()
+        run: |
+          shopt -s globstar nullglob
+          for diff in crates/ae3-gui-tests/tests/snapshots/**/*.diff.png; do
+            box=$(convert "$diff" -fuzz 2% -trim -format '%wx%h at +%X+%Y of %Wx%H' info:)
+            echo "::warning title=Snapshot differs::$(basename "$diff" .diff.png): $box"
+          done
       - name: Upload snapshot differences
         if: failure()
         uses: actions/upload-artifact@v7

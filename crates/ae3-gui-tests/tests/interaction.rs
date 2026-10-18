@@ -38,6 +38,15 @@ fn click(h: &mut H, label: &str) {
     h.run_ok();
 }
 
+/// Scrolls the widget labelled `label` into view, as a user would, and
+/// clicks it.
+#[track_caller]
+fn scroll_and_click(h: &mut H, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run_ok();
+    click(h, label);
+}
+
 /// The text field labelled `label`.
 #[track_caller]
 fn text_field<'a>(h: &'a H, label: &'a str) -> egui_kittest::Node<'a> {
@@ -85,7 +94,7 @@ fn shown(h: &H, names: &[&str]) -> Vec<String> {
 }
 
 /// A window over a [`FakeCdn`] publishing the synthetic Manifest, loaded with
-/// Fetch Latest.
+/// Fetch latest.
 fn synthetic_window(name: &str) -> (TempDir, Arc<FakeCdn>, H) {
     let dir = TempDir::new(name);
     let cdn = FakeCdn::empty();
@@ -95,9 +104,9 @@ fn synthetic_window(name: &str) -> (TempDir, Arc<FakeCdn>, H) {
     (dir, cdn, h)
 }
 
-/// Presses Fetch Latest and waits for the Manifest.
+/// Presses Fetch latest and waits for the Manifest.
 fn fetch_latest(h: &mut H) {
-    click(h, "Fetch Latest");
+    click(h, "Fetch latest");
     wait_for(h, "the Manifest", |app| !app.model.manifest_job.is_active());
 }
 
@@ -238,20 +247,20 @@ fn typing_a_search_filters_the_bundles_table() {
 fn the_type_filter_shows_only_packages_holding_that_kind() {
     let (_dir, _cdn, mut h) = synthetic_window("type-filter");
     let names = ["charui_testpilot", "audio_test_ui", "audio_test_music"];
-    let audio = h.get_by_label("♪ Audio");
+    let audio = h.get_by_label("Audio");
     assert_eq!(audio.accesskit_node().toggled(), Some(Toggled::False));
-    click(&mut h, "♪ Audio");
+    click(&mut h, "Audio");
     assert_eq!(
-        h.get_by_label("♪ Audio").accesskit_node().toggled(),
+        h.get_by_label("Audio").accesskit_node().toggled(),
         Some(Toggled::True)
     );
     assert_eq!(shown(&h, &names), ["audio_test_ui", "audio_test_music"]);
     h.get_by_label("2 of 9 Packages");
 
     // Bundles whose contents are not known yet are hidden by any filter.
-    click(&mut h, "▣ Texture");
+    click(&mut h, "Texture");
     assert_eq!(shown(&h, &names), ["audio_test_ui", "audio_test_music"]);
-    click(&mut h, "All");
+    click(&mut h, "All types");
     assert_eq!(shown(&h, &names), names);
 }
 
@@ -306,9 +315,9 @@ fn shift_and_command_clicks_select_several_rows() {
             "vanity_testpilot"
         ]
     );
-    h.get_by_label("Extract Selected (4)");
+    h.get_by_label("Extract selected (4)");
 
-    click(&mut h, "Clear");
+    click(&mut h, "Clear selection");
     assert_eq!(h.state().app().model.selection.len(), 0);
 }
 
@@ -359,8 +368,8 @@ fn a_fixture_bundle_previews_with_thumbnails_and_extracts_checked_assets() {
             .toggled()
     };
     assert_eq!(check(&h, "bossk_tex"), Some(Toggled::False));
-    click(&mut h, "Extract bossk_tex");
-    click(&mut h, "Extract rfl_bossk_tex");
+    scroll_and_click(&mut h, "Extract bossk_tex");
+    scroll_and_click(&mut h, "Extract rfl_bossk_tex");
     assert_eq!(check(&h, "bossk_tex"), Some(Toggled::True));
     h.get_by_label("2 checked");
 
@@ -663,7 +672,7 @@ fn audio_package_sounds_play_and_stop() {
         .set_audio_output(Box::new(recorder.clone()));
     assert_eq!(
         play_button(&h, &stem).accesskit_node().label().as_deref(),
-        Some("▶ Play")
+        Some("Play")
     );
     play_button(&h, &stem).click();
     let sound = SoundRef::Sound(index);
@@ -676,7 +685,7 @@ fn audio_package_sounds_play_and_stop() {
     ));
     assert_eq!(
         play_button(&h, &stem).accesskit_node().label().as_deref(),
-        Some("■ Stop")
+        Some("Stop")
     );
     play_button(&h, &stem).click();
     h.run_ok();
@@ -760,7 +769,7 @@ fn the_diff_tab_compares_two_manifests() {
     h.get_by_label("charui_retired_test");
     h.get_by_label("Removed Packages exist only in the older Asset Version.");
     assert!(
-        h.get_by_label("Extract All (1)")
+        h.get_by_label("Extract all (1)")
             .accesskit_node()
             .is_disabled()
     );
@@ -775,6 +784,10 @@ fn output_settings_persist_to_the_config_file() {
     let mut spec = Spec::new(dir.path(), FakeCdn::offline().net());
     spec.config_path = Some(path.clone());
     let mut h = harness(spec);
+    // The sidebar sums the settings up; they are edited in their window.
+    h.get_by_label("Layout default");
+    assert!(h.query_by_label("Skip existing").is_none());
+    click(&mut h, "Edit settings");
 
     click(&mut h, "Skip existing");
     click(&mut h, "Split sprite atlases");
@@ -784,10 +797,23 @@ fn output_settings_persist_to_the_config_file() {
             .accesskit_node()
             .is_disabled()
     );
-    h.get_by_value("Layout: default").click();
+    let layout = h.get_by_role_and_label(Role::ComboBox, "Layout");
+    assert_eq!(
+        layout.value().as_deref(),
+        Some("Default: {category}/{bundle}/")
+    );
+    layout.click();
     h.run_ok();
-    click(&mut h, "Layout: ae2");
-    h.get_by_value("Layout: ae2");
+    click(&mut h, "ae2: {category}/");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Layout")
+            .value()
+            .as_deref(),
+        Some("ae2: {category}/")
+    );
+    // The summary follows.
+    h.get_by_label("Layout ae2 · skip existing");
+    h.get_by_label("Atlases whole");
 
     // Saved a second after the last change.
     wait_for(&mut h, "the settings file", |_| path.exists());
@@ -879,7 +905,7 @@ fn a_network_failure_is_shown_as_an_error() {
     fetch_latest(&mut h);
     h.get_by_label_contains("could not determine the Asset Version automatically");
     assert!(h.state().app().model.manifest.is_none());
-    h.get_by_label_contains("Choose a Platform and press Fetch Latest");
+    h.get_by_label_contains("Choose a Platform and press Fetch latest");
 
     // An explicit Asset Version, entered with the Enter key, fails too.
     type_into(&mut h, "Asset Version", "100055");
@@ -914,13 +940,31 @@ fn a_newer_ae3_release_is_announced_and_can_be_dismissed() {
 
     let link = h.get_by_label("swgoh-ae3 v99.0.0 available");
     assert_eq!(link.accesskit_node().role(), Role::Link);
-    click(&mut h, "×");
+    click(&mut h, "Dismiss release notice");
     assert!(h.query_by_label("swgoh-ae3 v99.0.0 available").is_none());
     let saved = dir.path().join("cache").join(ReleaseState::FILE);
     wait_for(&mut h, "the dismissal to be saved", |_| {
         std::fs::read_to_string(&saved)
             .is_ok_and(|s| ReleaseState::parse(&s).dismissed.as_deref() == Some("v99.0.0"))
     });
+}
+
+/// The macOS menu bar's "About swgoh-ae3" opens the app's About window, not
+/// the system's standard panel.
+#[test]
+fn the_menu_bar_about_item_opens_the_about_window() {
+    use ae3_gui::menu::Command;
+
+    let dir = TempDir::new("menu-about");
+    let mut h = harness(Spec::new(dir.path(), FakeCdn::offline().net()));
+    assert!(h.query_by_label("Check for updates").is_none());
+    h.state().app().menu_inbox().push(Command::About);
+    // As eframe hands each frame's input to the app before running it.
+    let mut input = eframe::egui::RawInput::default();
+    h.state_mut().app_mut().take_menu_commands(&mut input);
+    h.run_ok();
+    h.get_by_label("About swgoh-ae3");
+    h.get_by_label("Check for updates");
 }
 
 #[test]
@@ -937,7 +981,7 @@ fn about_shows_the_version_and_checks_for_updates_on_request() {
     let asks = || cdn.requests_containing("api.github.com");
 
     click(&mut h, "About");
-    h.get_by_label("swgoh-ae3");
+    h.get_by_label("About swgoh-ae3");
     h.get_by_label(&format!("Version {CURRENT}"));
     assert_eq!(asks(), 0, "opening About asks nothing");
 
@@ -973,7 +1017,7 @@ fn about_shows_the_version_and_checks_for_updates_on_request() {
     assert_eq!(asks(), 3, "each click asks once, ignoring the daily limit");
 
     // The window closes with its title-bar button.
-    h.state_mut().app_mut().model.about_open = false;
+    h.state_mut().app_mut().model.windows.about = false;
     h.run_ok();
     assert!(h.query_by_label("Check for updates").is_none());
 }

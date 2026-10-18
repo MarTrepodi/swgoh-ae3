@@ -119,10 +119,21 @@ pub struct Ae3App {
     extract_cancel: Option<Arc<AtomicBool>>,
     pub diff_store: Option<Store>,
     checker: Option<TextureHandle>,
-    /// The application icon, for the About window; loaded on first use.
-    about_icon: Option<TextureHandle>,
+    /// The application icon, for the header and the About window; loaded
+    /// on first use.
+    app_icon: Option<TextureHandle>,
+    /// The version the header and About window show; the build's own,
+    /// except where tests pin it.
+    version_label: String,
     max_texture_side: u32,
     pub last_load_error: Option<String>,
+    /// What the macOS menu bar asked for, drained before each frame.
+    menu_inbox: crate::menu::Inbox,
+    /// What the menu asked of this frame besides input: a paste.
+    menu_requests: crate::menu::Requests,
+    /// The macOS menu bar, kept alive with the window.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<crate::menu::Native>,
 }
 
 impl Ae3App {
@@ -151,7 +162,7 @@ impl Ae3App {
         notice: Option<String>,
         services: Services,
     ) -> Self {
-        crate::ui::install_fonts(ctx);
+        crate::ui::install(ctx);
         let repaint = ctx.clone();
         let (outbox, inbox) = Outbox::new(move || repaint.request_repaint());
         let ended = outbox.clone();
@@ -199,9 +210,14 @@ impl Ae3App {
             extract_cancel: None,
             diff_store: None,
             checker: None,
-            about_icon: None,
+            app_icon: None,
+            version_label: crate::model::release::CURRENT.to_owned(),
             max_texture_side: 2048,
             last_load_error: None,
+            menu_inbox: crate::menu::Inbox::default(),
+            menu_requests: crate::menu::Requests::default(),
+            #[cfg(target_os = "macos")]
+            native_menu: None,
         }
     }
 
@@ -215,6 +231,39 @@ impl Ae3App {
         if self.config.check_for_updates {
             self.start_release_check();
         }
+    }
+
+    /// Builds the macOS menu bar, whose About item opens the About window
+    /// ([`crate::menu`]). Does nothing elsewhere; tests leave it out. Call
+    /// from eframe's app creator, on the main thread.
+    pub fn install_menu(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        match crate::menu::install(ctx, self.menu_inbox.clone()) {
+            Ok(menu) => self.native_menu = Some(menu),
+            Err(e) => self.model.notice = Some(format!("The menu bar could not be built: {e}")),
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = ctx;
+    }
+
+    /// Where the menu bar's commands arrive; tests push to it as the menu
+    /// would.
+    #[must_use]
+    pub fn menu_inbox(&self) -> &crate::menu::Inbox {
+        &self.menu_inbox
+    }
+
+    /// Applies the menu's commands to the input of the frame about to run.
+    pub fn take_menu_commands(&mut self, raw_input: &mut egui::RawInput) {
+        let commands = self.menu_inbox.take();
+        if commands.is_empty() {
+            return;
+        }
+        let requests = crate::menu::apply(&commands, raw_input);
+        if requests.about {
+            self.model.windows.about = true;
+        }
+        self.menu_requests.paste |= requests.paste;
     }
 
     // ---- Seams for tests and the smoke run -----------------------------
@@ -377,13 +426,27 @@ impl Ae3App {
         });
     }
 
-    /// The application icon as a texture, for the About window.
-    pub fn about_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
-        if self.about_icon.is_none() {
-            self.about_icon = crate::icon::color_image()
+    /// The application icon as a texture, for the header and the About
+    /// window.
+    /// The version shown in the header and About window.
+    #[must_use]
+    pub fn version_label(&self) -> &str {
+        &self.version_label
+    }
+
+    /// Shows `label` as the version instead of the build's own. Snapshot
+    /// tests pin it so that a release, which bumps the version, does not
+    /// change every screenshot. Update checks still use the real version.
+    pub fn set_version_label(&mut self, label: impl Into<String>) {
+        self.version_label = label.into();
+    }
+
+    pub fn app_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
+        if self.app_icon.is_none() {
+            self.app_icon = crate::icon::color_image()
                 .map(|image| ctx.load_texture("app-icon", image, TextureOptions::LINEAR));
         }
-        self.about_icon.clone()
+        self.app_icon.clone()
     }
 
     /// The About window's check came back.
@@ -1333,6 +1396,12 @@ impl Ae3App {
 impl Ae3App {
     /// The per-frame work outside drawing: messages, timers, saving.
     fn tick(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.menu_requests.paste) {
+            // The integration reads the clipboard and delivers it as a
+            // paste next frame.
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ctx.request_repaint();
+        }
         while let Ok(msg) = self.inbox.try_recv() {
             self.handle(ctx, msg);
         }
@@ -1383,6 +1452,10 @@ impl eframe::App for Ae3App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.take_menu_commands(raw_input);
     }
 
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
@@ -2106,8 +2179,17 @@ mod tests {
         assert!(
             painted_texts(&ctx, &mut app)
                 .iter()
-                .any(|t| t == "Meshes: OBJ + glb"),
-            "the Output section shows the choice"
+                .any(|t| t == "PNG · Ogg Vorbis · OBJ + glb"),
+            "the Output card sums up the choice"
+        );
+        app.model.windows.settings = true;
+        // A new window is sized on its first frame and shown on the next.
+        painted_texts(&ctx, &mut app);
+        assert!(
+            painted_texts(&ctx, &mut app)
+                .iter()
+                .any(|t| t == "OBJ + glb"),
+            "the Settings window shows it"
         );
     }
 
@@ -2297,7 +2379,8 @@ mod tests {
         let generation = app.preview_generation.load(Ordering::Relaxed);
         app.preview_opened(generation, Ok(Opened::Audio { package, sounds }));
         let texts = painted_texts(&ctx, &mut app);
-        assert!(texts.iter().any(|t| t == "▶ Play"), "{texts:?}");
+        let play = crate::ui::icons::with(crate::ui::icons::PLAY, "Play");
+        assert!(texts.contains(&play), "{texts:?}");
         assert!(texts.iter().any(|t| t == "can't play"), "{texts:?}");
         assert_eq!(
             app.playback.state(SoundRef::Sound(opus)),
@@ -2325,7 +2408,8 @@ mod tests {
             "{played:?}"
         );
         let texts = painted_texts(&ctx, &mut app);
-        assert!(texts.iter().any(|t| t == "■ Stop"), "{texts:?}");
+        let stop = crate::ui::icons::with(crate::ui::icons::STOP, "Stop");
+        assert!(texts.contains(&stop), "{texts:?}");
         assert!(
             settled_repaint_delay(&ctx, &mut app) >= IDLE,
             "playing schedules no repaint; the end report wakes the UI"

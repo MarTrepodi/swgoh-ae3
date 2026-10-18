@@ -17,6 +17,7 @@
 pub mod app;
 mod highlight;
 pub mod icon;
+pub mod menu;
 pub mod model;
 pub mod output;
 pub mod smoke;
@@ -81,6 +82,13 @@ pub fn native_options() -> eframe::NativeOptions {
             .with_icon(std::sync::Arc::new(icon::window_icon())),
         // The 3D Mesh view depth-tests against the window's framebuffer.
         depth_buffer: 24,
+        // winit's default menu bar would open macOS's standard About
+        // panel; the app builds its own (`menu::install`).
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|builder| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS as _;
+            builder.with_default_menu(false);
+        })),
         ..Default::default()
     }
 }
@@ -98,6 +106,7 @@ pub fn run() -> eframe::Result {
         native_options(),
         Box::new(move |cc| {
             let mut app = Ae3App::new(&cc.egui_ctx, config, file, path, notice);
+            app.install_menu(&cc.egui_ctx);
             app.start();
             Ok(Box::new(app))
         }),

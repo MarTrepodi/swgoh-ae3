@@ -7,7 +7,8 @@ use ae3_core::AssetInfo;
 use eframe::egui::{self, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, vec2};
 use egui_extras::{Column, TableBuilder};
 
-use super::{error_label, glyph, kind_label, match_color, text_size};
+use super::table::{ROW_HEIGHT, column_title};
+use super::{error_label, icons, kind_label, match_color, theme, widgets};
 use crate::app::Ae3App;
 use crate::model::playback::{PlayState, SoundRef};
 use crate::model::preview::{PreviewStatus, has_image, summary};
@@ -16,6 +17,8 @@ use crate::model::table::format_bytes;
 const CELL_W: f32 = 124.0;
 const CELL_H: f32 = 166.0;
 const THUMB: f32 = 112.0;
+/// The size of a cell's checkbox.
+const CHECK: f32 = 18.0;
 
 pub fn pane(app: &mut Ae3App, ui: &mut egui::Ui) {
     let Some(preview) = &app.model.preview else {
@@ -29,15 +32,14 @@ pub fn pane(app: &mut Ae3App, ui: &mut egui::Ui) {
         format_bytes(app.textures.capacity())
     );
     ui.horizontal(|ui| {
-        ui.heading(&preview.package);
-        ui.label(RichText::new(format_bytes(size)).weak())
-            .on_hover_text(textures);
+        ui.add(egui::Label::new(RichText::new(&preview.package).heading()).truncate());
+        widgets::muted(ui, format_bytes(size)).on_hover_text(textures);
     });
     match &preview.status {
         PreviewStatus::Loading => {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(app.preview_status.as_deref().unwrap_or("Opening…"));
+                widgets::muted(ui, app.preview_status.as_deref().unwrap_or("Opening…"));
             });
         }
         PreviewStatus::Failed(e) => error_label(ui, e.clone()),
@@ -51,14 +53,17 @@ fn toolbar(app: &mut Ae3App, ui: &mut egui::Ui) {
         return;
     };
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Select All").clicked() {
+        if widgets::button(ui, Some(icons::SELECT_ALL), "Check all", true)
+            .on_hover_text("Check every Asset shown, to extract them")
+            .clicked()
+        {
             preview.check_all();
         }
-        if ui.button("Clear").clicked() {
+        let n = preview.checked_count();
+        if widgets::button(ui, None, "Uncheck all", n > 0).clicked() {
             preview.clear_checks();
         }
-        let n = preview.checked_count();
-        ui.label(RichText::new(format!("{n} checked")).weak());
+        widgets::muted(ui, format!("{n} checked"));
         if !preview.is_audio() {
             let hidden = preview.hidden_count();
             let mut show = preview.show_other;
@@ -72,9 +77,13 @@ fn toolbar(app: &mut Ae3App, ui: &mut egui::Ui) {
             }
             if !preview.highlighted.is_empty() {
                 ui.label(
-                    RichText::new(format!("{} matching", preview.highlighted.len()))
-                        .color(match_color(ui)),
-                );
+                    RichText::new(icons::with(
+                        icons::SEARCH,
+                        &format!("{} matching", preview.highlighted.len()),
+                    ))
+                    .color(match_color(ui)),
+                )
+                .accessible_name(format!("{} matching", preview.highlighted.len()));
             }
         }
     });
@@ -106,7 +115,7 @@ fn bundle_grid(app: &mut Ae3App, ui: &mut egui::Ui) {
         .as_ref()
         .map_or(0, crate::model::preview::Preview::cell_count);
     if count == 0 {
-        ui.label(RichText::new("No Assets to show.").weak());
+        widgets::muted(ui, "No Assets to show.");
         return;
     }
     let per_row = columns(ui.available_width(), CELL_W, ui.spacing().item_spacing.x);
@@ -153,33 +162,30 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     let highlighted = preview.highlighted.contains(&asset.path_id);
     let mut checked = preview.checked_assets.contains(&asset.path_id);
     let visuals = ui.visuals().clone();
+    let p = theme::palette(ui);
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
-        let fill = if response.hovered() {
-            visuals.widgets.hovered.weak_bg_fill
+        let radius = CornerRadius::same(theme::CONTROL_RADIUS);
+        let fill = if checked {
+            p.accent_tint
+        } else if response.hovered() {
+            p.raised_hover
         } else {
-            visuals.faint_bg_color
+            p.raised
         };
-        painter.rect_filled(rect, CornerRadius::same(4), fill);
-        if highlighted {
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                CornerRadius::same(4),
-                Stroke::new(2.0, match_color(ui)),
-                StrokeKind::Inside,
-            );
+        let stroke = if highlighted {
+            Stroke::new(2.0, match_color(ui))
         } else if checked {
-            painter.rect_stroke(
-                rect.shrink(1.0),
-                CornerRadius::same(4),
-                visuals.selection.stroke,
-                StrokeKind::Inside,
-            );
-        }
+            Stroke::new(1.5, p.accent_text)
+        } else {
+            Stroke::new(1.0, p.border)
+        };
+        painter.rect(rect.shrink(1.0), radius, fill, stroke, StrokeKind::Inside);
         let thumb_rect = Rect::from_min_size(
             rect.min + vec2((CELL_W - THUMB) / 2.0, 6.0),
             vec2(THUMB, THUMB),
         );
+        painter.rect_filled(thumb_rect, CornerRadius::same(4), p.inset);
         let mut drew = false;
         if has_image(asset.kind) {
             if let Some(texture) = app.thumbnail(&package, asset.path_id) {
@@ -215,7 +221,7 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
             painter.text(
                 thumb_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                glyph(asset.kind),
+                icons::kind(asset.kind),
                 egui::FontId::proportional(40.0),
                 visuals.weak_text_color(),
             );
@@ -228,20 +234,19 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
         let line = |text: String, size: f32, color: Color32| {
             let mut job = egui::text::LayoutJob::simple_singleline(
                 text,
-                egui::FontId::proportional(text_size(size)),
+                egui::FontId::proportional(size),
                 color,
             );
             job.wrap = egui::text::TextWrapping::truncate_at_width(text_rect.width());
             painter.layout_job(job)
         };
+        let mut title =
+            egui::text::LayoutJob::simple_singleline(name, theme::medium_font(13.0), p.text_strong);
+        title.wrap = egui::text::TextWrapping::truncate_at_width(text_rect.width());
+        painter.galley(text_rect.min, painter.layout_job(title), p.text_strong);
         painter.galley(
-            text_rect.min,
-            line(name, 12.0, visuals.text_color()),
-            visuals.text_color(),
-        );
-        painter.galley(
-            egui::pos2(text_rect.min.x, text_rect.min.y + text_size(12.0) + 4.0),
-            line(summary(asset), 10.5, visuals.weak_text_color()),
+            egui::pos2(text_rect.min.x, text_rect.min.y + 17.0),
+            line(summary(asset), theme::size::SMALL, p.text_muted),
             visuals.weak_text_color(),
         );
     }
@@ -249,9 +254,11 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     // goes in a child Ui so it does not move the row's cursor: `ui.put`
     // would advance the cursor to just after the checkbox, and the next
     // cell would then be drawn over this one.
-    let check_rect = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(18.0, 18.0));
-    if ui
-        .new_child(egui::UiBuilder::new().max_rect(check_rect))
+    let check_rect = Rect::from_min_size(rect.min + vec2(4.0, 4.0), vec2(CHECK, CHECK));
+    let mut check_ui = ui.new_child(egui::UiBuilder::new().max_rect(check_rect));
+    // A checkbox is as tall as a button; this one fits the corner.
+    check_ui.spacing_mut().interact_size.y = CHECK;
+    if check_ui
         .add(egui::Checkbox::without_text(&mut checked))
         .accessible_name(format!("Extract {}", asset.display_name()))
         .changed()
@@ -279,6 +286,10 @@ fn cell(app: &mut Ae3App, ui: &mut egui::Ui, asset: &AssetInfo) -> bool {
     response.double_clicked()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "lays out one widget in drawing order"
+)]
 fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
     toolbar(app, ui);
     ui.separator();
@@ -289,91 +300,98 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
         return;
     };
     if sounds.is_empty() {
-        ui.label(RichText::new("This Audio Package holds no sounds.").weak());
+        widgets::muted(ui, "This Audio Package holds no sounds.");
         return;
     }
     let sounds = sounds.clone();
     let playback = &app.playback;
     let mut toggled: Option<u64> = None;
     let mut pressed: Option<SoundRef> = None;
-    TableBuilder::new(ui)
-        .id_salt("sounds")
-        .striped(true)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        // Every column clips its content. Text wider than an unclipped
-        // column widens the row past the panel, the resizable panel grows
-        // to fit, the remainder column takes the new space, and the pane
-        // creeps across the window a little every frame.
-        .column(Column::exact(22.0))
-        .column(Column::exact(PLAY_W).clip(true))
-        .column(Column::remainder().at_least(100.0).clip(true))
-        .column(Column::initial(64.0).clip(true))
-        .column(Column::initial(150.0).clip(true))
-        .column(Column::initial(68.0).clip(true))
-        .column(Column::initial(72.0).clip(true))
-        .auto_shrink(false)
-        .header(18.0, |mut h| {
-            h.col(|_| {});
-            h.col(|_| {});
-            h.col(|ui| {
-                ui.strong("Sound");
-            });
-            h.col(|ui| {
-                ui.strong("Language");
-            });
-            h.col(|ui| {
-                ui.strong("Codec");
-            });
-            h.col(|ui| {
-                ui.strong("Duration");
-            });
-            h.col(|ui| {
-                ui.strong("Size");
-            });
-        })
-        .body(|body| {
-            body.rows(20.0, sounds.len(), |mut row| {
-                let s = &sounds[row.index()];
-                let mut checked = preview.checked_sounds.contains(&s.id);
-                row.col(|ui| {
-                    if ui
-                        .checkbox(&mut checked, "")
-                        .accessible_name(format!("Extract {}", s.stem))
-                        .changed()
-                    {
-                        toggled = Some(s.id);
-                    }
+    // Scrolls sideways when the pane is narrower than the columns, so the
+    // table never pushes the pane wider.
+    egui::ScrollArea::horizontal()
+        .id_salt("sounds-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            TableBuilder::new(ui)
+                .id_salt("sounds")
+                .striped(true)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                // Every column clips its content. Text wider than an unclipped
+                // column widens the row past the panel, the resizable panel grows
+                // to fit, the remainder column takes the new space, and the pane
+                // creeps across the window a little every frame.
+                .column(Column::exact(22.0))
+                .column(Column::exact(PLAY_W).clip(true))
+                .column(Column::remainder().at_least(80.0).clip(true))
+                .column(Column::initial(84.0).clip(true))
+                .column(Column::initial(132.0).clip(true))
+                .column(Column::initial(64.0).clip(true))
+                .column(Column::initial(68.0).clip(true))
+                .auto_shrink(false)
+                .header(super::table::HEADER_HEIGHT, |mut h| {
+                    h.col(|_| {});
+                    h.col(|_| {});
+                    h.col(|ui| {
+                        column_title(ui, "Sound");
+                    });
+                    h.col(|ui| {
+                        column_title(ui, "Language");
+                    });
+                    h.col(|ui| {
+                        column_title(ui, "Codec");
+                    });
+                    h.col(|ui| {
+                        column_title(ui, "Duration");
+                    });
+                    h.col(|ui| {
+                        column_title(ui, "Size");
+                    });
+                })
+                .body(|body| {
+                    body.rows(ROW_HEIGHT, sounds.len(), |mut row| {
+                        let s = &sounds[row.index()];
+                        let mut checked = preview.checked_sounds.contains(&s.id);
+                        row.col(|ui| {
+                            if ui
+                                .checkbox(&mut checked, "")
+                                .accessible_name(format!("Extract {}", s.stem))
+                                .changed()
+                            {
+                                toggled = Some(s.id);
+                            }
+                        });
+                        row.col(|ui| {
+                            let sound = SoundRef::Sound(s.index);
+                            if play_control(ui, playback.state(sound)) {
+                                pressed = Some(sound);
+                            }
+                        });
+                        row.col(|ui| {
+                            ui.label(&s.stem)
+                                .on_hover_text(format!("{} · {}", s.source, s.id));
+                        });
+                        row.col(|ui| {
+                            ui.label(&s.language);
+                        });
+                        row.col(|ui| {
+                            let mut codec = s.codec.unwrap_or("unknown").to_owned();
+                            if let (Some(ch), Some(rate)) = (s.channels, s.sample_rate) {
+                                let _ = write!(codec, " {ch}ch {}k", rate / 1000);
+                            }
+                            ui.label(codec);
+                        });
+                        row.col(|ui| {
+                            ui.label(
+                                s.duration_secs
+                                    .map_or_else(|| "—".to_owned(), |d| format!("{d:.2} s")),
+                            );
+                        });
+                        row.col(|ui| {
+                            ui.label(format_bytes(s.size));
+                        });
+                    });
                 });
-                row.col(|ui| {
-                    let sound = SoundRef::Sound(s.index);
-                    if play_control(ui, playback.state(sound)) {
-                        pressed = Some(sound);
-                    }
-                });
-                row.col(|ui| {
-                    ui.label(&s.stem)
-                        .on_hover_text(format!("{} · {}", s.source, s.id));
-                });
-                row.col(|ui| {
-                    ui.label(&s.language);
-                });
-                row.col(|ui| {
-                    let mut codec = s.codec.unwrap_or("unknown").to_owned();
-                    if let (Some(ch), Some(rate)) = (s.channels, s.sample_rate) {
-                        let _ = write!(codec, " {ch}ch {}k", rate / 1000);
-                    }
-                    ui.label(codec);
-                });
-                row.col(|ui| {
-                    ui.label(
-                        s.duration_secs
-                            .map_or_else(|| "—".to_owned(), |d| format!("{d:.2} s")),
-                    );
-                });
-                row.col(|ui| {
-                    ui.label(format_bytes(s.size));
-                });
-            });
         });
     if let Some(id) = toggled {
         preview.toggle_sound(id);
@@ -384,24 +402,26 @@ fn sound_list(app: &mut Ae3App, ui: &mut egui::Ui) {
 }
 
 /// Width of the play control: room for "can't play".
-pub const PLAY_W: f32 = 84.0;
+pub const PLAY_W: f32 = 80.0;
 
 /// A sound's play control: Play, Stop, a spinner while it decodes, or
 /// "can't play" with the reason on hover. Returns true when pressed.
 pub fn play_control(ui: &mut egui::Ui, state: PlayState<'_>) -> bool {
     match state {
         PlayState::Idle => ui
-            .small_button("▶ Play")
+            .small_button(icons::with(icons::PLAY, "Play"))
+            .accessible_name("Play")
             .on_hover_text("Play this sound")
             .clicked(),
         PlayState::Playing => ui
-            .small_button("■ Stop")
+            .small_button(icons::with(icons::STOP, "Stop"))
+            .accessible_name("Stop")
             .on_hover_text("Stop playing")
             .clicked(),
         PlayState::Decoding => {
             ui.spinner();
             // A press while decoding cancels it.
-            ui.small_button("■").on_hover_text("Stop").clicked()
+            widgets::icon_button(ui, icons::STOP, "Stop").clicked()
         }
         PlayState::Unplayable(why) => {
             ui.label(RichText::new("can't play").weak())
