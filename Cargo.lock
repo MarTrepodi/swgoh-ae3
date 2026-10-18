@@ -134,7 +134,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ae3"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ae3-core",
  "clap",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
  "lewton",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ae3-audio",
  "ae3-image",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ae3-core",
  "eframe",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-gui-tests"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ae3-core",
  "ae3-gui",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-image"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "image-webp",
  "lz4_flex",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-oracle"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ae3-core",
  "unity-rs-core",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "ae3-unity"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lz4_flex",
  "lzma-rust2 0.22.0",
