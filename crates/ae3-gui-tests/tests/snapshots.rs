@@ -200,6 +200,15 @@ fn main_window_light() {
 }
 
 #[test]
+fn settings_window() {
+    let (_dir, mut h) = window("settings", Theme::Dark);
+    app(&mut h).model.windows.settings = true;
+    h.hover_at(egui::pos2(1270.0, 790.0));
+    h.run_ok();
+    h.snapshot_options("settings_window", &options());
+}
+
+#[test]
 fn search_results_list_game_entities() {
     let (_dir, mut h) = window("search_entities", Theme::Dark);
     let entity = |kind, id: &str, name: &str, bundles: &[&str]| GameEntity {
