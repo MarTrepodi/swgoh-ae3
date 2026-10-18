@@ -83,6 +83,11 @@ include = [
 github-build-setup = "../build-setup.yml"
 local-artifacts-jobs = ["./macos-app"]
 pr-run-mode = "plan"
+# release.yml carries one hand edit: its host job publishes with the release
+# token, which may create releases on commits that differ from main in
+# .github/workflows/ (GITHUB_TOKEN may not). dist cannot express that, so it
+# is told not to treat the edited file as out of date.
+allow-dirty = ["ci"]
 install-updater = false
 
 # Native runners. Ubuntu 22.04 keeps the glibc floor at 2.35.
