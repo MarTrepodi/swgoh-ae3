@@ -240,7 +240,13 @@ jobs:
     # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
     if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') && (needs.custom-macos-app.result == 'skipped' || needs.custom-macos-app.result == 'success') }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Hand edit (dist allow-dirty = ["ci"] in Cargo.toml): GitHub refuses
+      # to let GITHUB_TOKEN create a release whose commit differs from the
+      # default branch in .github/workflows/, which happens whenever a
+      # workflow change lands on main between the tag and this job. The
+      # release token carries the Workflows permission; without it the job
+      # falls back to GITHUB_TOKEN. Keep this line after `dist generate`.
+      GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
