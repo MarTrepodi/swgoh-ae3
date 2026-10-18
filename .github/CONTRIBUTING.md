@@ -106,7 +106,9 @@ The `ae3-gui-tests` crate drives the real window headless with [egui_kittest](ht
 
 **Snapshots use synthetic data only.** Everything they show must be made up in the test: invented Package and Asset names, generated textures and sounds. Never put game assets, fixtures or anything derived from them (thumbnails, screenshots) into a snapshot or any other committed image.
 
-Give new widgets an accessible name: the interaction tests find them by it, and they fail when an input widget has none. A visible label next to the widget, `Response::on_hover_text` or `Response::accessible_name` all work.
+Give new widgets an accessible name: the interaction tests find them by it, and they fail when an input widget has none. A visible label next to the widget, `Response::on_hover_text` or `Response::accessible_name` all work. The helpers in `crates/ae3-gui/src/ui/widgets.rs` (buttons, chips, segmented controls, status lines) name a control by its text without its icon, so tests and screen readers see "Play", not the icon's private-use character.
+
+The window's look lives in `crates/ae3-gui/src/ui/theme.rs` (the dark and light palettes, with a test that keeps text contrast at WCAG AA, and the type scale) and `ui/widgets.rs`. Use their colours and helpers rather than literal colours. Icons come from Phosphor through `ui/icons.rs`, which embeds only the icons it lists: add an icon there before using it. The Ubuntu fonts in `crates/ae3-gui/assets/fonts/` are the official files; their SHA-256s are recorded next to them.
 
 The shipped `ae3-gui` binary also has a scripted smoke run for CI: with `AE3_GUI_SMOKE=<report.json>` set it loads the latest Manifest from the live CDN, opens a Bundle (`AE3_GUI_SMOKE_BUNDLE`, default `charui_bossk`), its thumbnails and the detail viewer, measures idle CPU, saves a screenshot of its own window (`AE3_GUI_SMOKE_SCREENSHOT`, default the report path with `.png`), writes the report and exits: 0 when every step passed, 1 when one failed, 2 after `AE3_GUI_SMOKE_TIMEOUT` seconds (default 180). It never saves settings.
 
