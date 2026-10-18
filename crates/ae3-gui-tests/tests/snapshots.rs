@@ -61,6 +61,9 @@ fn window(name: &str, theme: Theme) -> (TempDir, H) {
     // A fixed path: the temporary directory's name changes every run.
     spec.config.output_dir = PathBuf::from("ae3-output");
     let mut h = harness_with(spec, SIZE, theme);
+    // Pinned: a release bumps the version, which must not change every
+    // screenshot that shows the header.
+    h.state_mut().app_mut().set_version_label("0.1.0");
     h.state_mut()
         .app_mut()
         .show_manifest(synthetic_manifest(VERSION))

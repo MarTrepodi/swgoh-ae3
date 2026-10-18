@@ -36,7 +36,8 @@ pub fn window(app: &mut Ae3App, ctx: &egui::Context) {
                     ui.add_space(6.0);
                     ui.heading(APP_NAME);
                     ui.label(
-                        RichText::new(format!("Version {}", release::CURRENT)).color(p.text_muted),
+                        RichText::new(format!("Version {}", app.version_label()))
+                            .color(p.text_muted),
                     );
                     ui.label("Star Wars: Galaxy of Heroes asset extractor");
                     ui.hyperlink_to("Source code and releases", release::REPOSITORY);

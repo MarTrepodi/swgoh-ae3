@@ -122,6 +122,9 @@ pub struct Ae3App {
     /// The application icon, for the header and the About window; loaded
     /// on first use.
     app_icon: Option<TextureHandle>,
+    /// The version the header and About window show; the build's own,
+    /// except where tests pin it.
+    version_label: String,
     max_texture_side: u32,
     pub last_load_error: Option<String>,
     /// What the macOS menu bar asked for, drained before each frame.
@@ -208,6 +211,7 @@ impl Ae3App {
             diff_store: None,
             checker: None,
             app_icon: None,
+            version_label: crate::model::release::CURRENT.to_owned(),
             max_texture_side: 2048,
             last_load_error: None,
             menu_inbox: crate::menu::Inbox::default(),
@@ -424,6 +428,19 @@ impl Ae3App {
 
     /// The application icon as a texture, for the header and the About
     /// window.
+    /// The version shown in the header and About window.
+    #[must_use]
+    pub fn version_label(&self) -> &str {
+        &self.version_label
+    }
+
+    /// Shows `label` as the version instead of the build's own. Snapshot
+    /// tests pin it so that a release, which bumps the version, does not
+    /// change every screenshot. Update checks still use the real version.
+    pub fn set_version_label(&mut self, label: impl Into<String>) {
+        self.version_label = label.into();
+    }
+
     pub fn app_icon(&mut self, ctx: &egui::Context) -> Option<TextureHandle> {
         if self.app_icon.is_none() {
             self.app_icon = crate::icon::color_image()

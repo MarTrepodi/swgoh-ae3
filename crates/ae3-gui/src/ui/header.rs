@@ -8,7 +8,7 @@ use super::widgets::{self, Tone};
 use super::{icons, theme};
 use crate::APP_NAME;
 use crate::app::Ae3App;
-use crate::model::release::{self, ReleaseVersion};
+use crate::model::release::ReleaseVersion;
 
 /// Height of the bar's contents.
 const HEIGHT: f32 = 30.0;
@@ -36,7 +36,7 @@ pub fn bar(app: &mut Ae3App, ui: &mut egui::Ui) {
                         .color(p.text_strong),
                 );
                 ui.label(
-                    RichText::new(format!("v{}", release::CURRENT))
+                    RichText::new(format!("v{}", app.version_label()))
                         .size(theme::size::SMALL)
                         .color(p.text_muted),
                 );
