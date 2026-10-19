@@ -3,8 +3,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::http::{HttpError, RangeResponse, Transport};
 
@@ -16,7 +16,10 @@ pub struct FakeTransport {
     failures: Mutex<HashMap<String, VecDeque<HttpError>>>,
     requests: Mutex<Vec<String>>,
     ranges: Mutex<Vec<(String, u64, u64)>>,
+    before_request: Mutex<Option<RequestHook>>,
 }
+
+type RequestHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 impl FakeTransport {
     pub fn with_file(self, url: &str, body: &[u8]) -> Self {
@@ -65,7 +68,18 @@ impl FakeTransport {
         self.requests.lock().unwrap().len()
     }
 
+    /// Calls `hook` with the URL of every later request before answering
+    /// it, on the requesting thread; it may block to hold that request.
+    pub fn before_request(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *self.before_request.lock().unwrap() = Some(Arc::new(hook));
+    }
+
     fn lookup(&self, url: &str) -> Result<Vec<u8>, HttpError> {
+        // Cloned out so a blocking hook does not hold the lock.
+        let hook = self.before_request.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(url);
+        }
         self.requests.lock().unwrap().push(url.to_owned());
         if let Some(err) = self
             .failures
