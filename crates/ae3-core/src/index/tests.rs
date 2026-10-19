@@ -525,7 +525,22 @@ fn cancelling_keeps_the_progress_made() {
         parallel: 1,
         ..IndexOptions::default()
     });
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
+    // The probing thread does not wait for progress to be reported, and
+    // this transport answers at once, so it could probe every Bundle
+    // before the callback below cancels. Hold requests for any later
+    // Bundle until it has (bounded, so a regression fails, not hangs).
+    let first = Mutex::new(None::<String>);
+    let held = Arc::clone(&cancel);
+    transport.before_request(move |url| {
+        if first.lock().unwrap().get_or_insert_with(|| url.to_owned()) == url {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !held.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
     let IndexRun { report, index } = b
         .run(
             &|p| {
