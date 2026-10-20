@@ -4,7 +4,8 @@ name: Full CI
 # and the UI tests (ui.yml: interaction and snapshot tests, plus an
 # end-to-end smoke run of each platform's release ae3-gui binary built
 # here). Too slow for every pull request, so it runs:
-#   - nightly, when main has changed since the last successful run;
+#   - nightly, when main has code no earlier full run built
+#     (scripts/full-ci-needed.sh);
 #   - on release-plz's release pull request, so nothing ships untested;
 #   - on any pull request labelled full-ci;
 #   - on demand (workflow_dispatch).
@@ -37,9 +38,15 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      contents: read
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
+      # The nightly compares main's code with what earlier runs built.
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - id: decide
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,13 +61,11 @@ jobs:
                 run=true
               fi
               ;;
-            schedule)
-              last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow full.yml --branch main \
-                --status success --limit 20 --json headSha,event \
-                --jq '[.[] | select(.event == "schedule" or .event == "workflow_dispatch")][0].headSha // ""')
-              if [[ "$last" != "$GITHUB_SHA" ]]; then run=true; fi
-              echo "Last successful full run: ${last:-none}; main is at $GITHUB_SHA"
-              ;;
+            # Only code nothing has built yet: not docs, workflows or a
+            # release merge its release pull request already built. A run
+            # that failed counts as built: retry a flaky failure with
+            # "Re-run failed jobs", which also reruns the report.
+            schedule) run=$(bash scripts/full-ci-needed.sh "$GITHUB_SHA") ;;
           esac
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Run full CI: $run"
@@ -247,7 +252,7 @@ jobs:
   # Nightly runs have no pull request to show their result, so a failure
   # opens a nightly-failure issue (or comments on the open one) listing the
   # failed jobs, and the next passing run closes it. Runs the gate skipped
-  # (main unchanged) tested nothing and report nothing.
+  # (no new code) tested nothing and report nothing.
   report:
     name: Nightly report
     if: always() && github.event_name == 'schedule' && (needs.gate.result != 'success' || needs.gate.outputs.run == 'true')
