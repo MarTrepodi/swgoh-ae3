@@ -41,11 +41,11 @@ Pre-built binaries are published on the [Releases](https://github.com/swgoh-util
 | Platform | CLI archive (contains) | GUI archive (contains) |
 |---|---|---|
 | Windows x86_64 | `ae3-x86_64-pc-windows-msvc.zip` (`ae3.exe`) | `swgoh-ae3-windows-x86_64.msi` (installer, see below) or `ae3-gui-x86_64-pc-windows-msvc.zip` (`ae3-gui.exe`) |
-| macOS (Apple silicon) | `ae3-aarch64-apple-darwin.tar.xz` (`ae3`) | `ae3-gui-aarch64-apple-darwin.zip` (`swgoh-ae3.app`) |
+| macOS (Apple silicon) | `ae3-aarch64-apple-darwin.tar.xz` (`ae3`) | `swgoh-ae3-macos-arm64.dmg` (`swgoh-ae3.app`, an Applications shortcut) or `ae3-gui-aarch64-apple-darwin.zip` (`swgoh-ae3.app`) |
 | Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
 | Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` (`ae3`) | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` (`ae3-gui`, `ae3-gui.desktop`, `swgoh-ae3.png`) |
 
-Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). The GUI archives add `FONT-NOTICES.md`, the licenses of the fonts and icons the GUI embeds. Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
+Every archive also contains `LICENSE`, `README.md`, `CHANGELOG.md`, `THIRD-PARTY-NOTICES.md` (the Wwise Vorbis codebooks) and `THIRD-PARTY-LICENSES.md` (the Rust crates built in). The GUI archives add `FONT-NOTICES.md`, the licenses of the fonts and icons the GUI embeds. The macOS disk image holds only the app and a shortcut to drag it onto; `swgoh-ae3.app` carries the same files in `Contents/Resources`. Each archive has a `.sha256` checksum file next to it on the release page. On Windows and macOS the binaries need nothing else installed. The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later). The Linux GUI also needs the ALSA library (`libasound.so.2`, package `libasound2` or `alsa-lib`) to start; desktop distributions install it by default, and PipeWire and PulseAudio play its sound through their ALSA plugins.
 
 The Windows installer, `swgoh-ae3-windows-x86_64.msi`, installs both programs for all users into `C:\Program Files\swgoh-ae3`, with the license and notice files. It adds a **swgoh-ae3** Start menu shortcut for the GUI and puts the folder on the system `PATH`, so `ae3` works in a new terminal. Installing a newer version replaces the old one. **Settings** → **Apps** uninstalls it and removes all three.
 
@@ -63,6 +63,12 @@ Early releases are not code-signed. `swgoh-ae3.app` is signed ad hoc only:
 
   ```bash
   xattr -dr com.apple.quarantine swgoh-ae3.app ae3
+  ```
+
+  An app installed from the disk image is at `/Applications/swgoh-ae3.app`:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/swgoh-ae3.app
   ```
 
 - **Windows:** SmartScreen may warn on first launch. Choose **More info** → **Run anyway**.
