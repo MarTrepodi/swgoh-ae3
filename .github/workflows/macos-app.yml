@@ -1,8 +1,10 @@
 # cargo-dist custom job (local-artifacts-jobs in Cargo.toml). release.yml
 # calls it alongside its own builds; every `artifacts-*` upload ends up on
 # the GitHub Release. It ships the macOS GUI as swgoh-ae3.app, which dist cannot
-# build, so ae3-gui's dist targets leave out aarch64-apple-darwin: zipped, and
-# as a disk image (swgoh-ae3-macos-arm64.dmg).
+# build: zipped, and as a disk image (swgoh-ae3-macos-arm64.dmg). It also packs
+# the macOS CLI archive (ae3-aarch64-apple-darwin.tar.xz) from the same build,
+# so dist's targets leave out aarch64-apple-darwin and a release starts one
+# macOS runner, the costliest kind, instead of two.
 name: macOS app
 
 on:
@@ -37,8 +39,11 @@ jobs:
           cargo fetch --locked
           cargo about generate --workspace --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
 
-      - name: Build ae3-gui
-        run: cargo build --profile dist --locked -p ae3-gui --target aarch64-apple-darwin
+      - name: Build ae3 and ae3-gui
+        run: cargo build --profile dist --locked -p ae3 -p ae3-gui --target aarch64-apple-darwin
+
+      - name: Pack ae3-aarch64-apple-darwin.tar.xz
+        run: packaging/macos/archive-cli.sh target/aarch64-apple-darwin/dist/ae3 target/distrib
 
       - name: Bundle swgoh-ae3.app
         run: |
@@ -49,6 +54,8 @@ jobs:
         with:
           name: artifacts-macos-app
           path: |
+            target/distrib/ae3-aarch64-apple-darwin.tar.xz
+            target/distrib/ae3-aarch64-apple-darwin.tar.xz.sha256
             target/distrib/ae3-gui-aarch64-apple-darwin.zip
             target/distrib/ae3-gui-aarch64-apple-darwin.zip.sha256
             target/distrib/swgoh-ae3-macos-arm64.dmg
