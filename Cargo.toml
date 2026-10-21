@@ -7,7 +7,10 @@ version = "0.1.3"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
-repository = "https://github.com/swgoh-utils/swgoh-ae3"
+# Where the repository lives today; it moves to swgoh-utils/swgoh-ae3 later.
+# dist builds the release notes' download links from this, and ae3-gui's
+# update check asks this repository's latest release, so switch it on the move.
+repository = "https://github.com/MarTrepodi/swgoh-ae3"
 
 [workspace.dependencies]
 ae3-audio = { path = "crates/ae3-audio" }
