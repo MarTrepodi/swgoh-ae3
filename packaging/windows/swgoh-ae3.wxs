@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Windows installer, swgoh-ae3-windows-x86_64.msi (WiX Toolset 5; built
+  by packaging/windows/build-msi.ps1). It installs per machine into
+  Program Files\swgoh-ae3:
+
+    ae3-gui.exe   with a Start menu shortcut named swgoh-ae3
+    ae3.exe       the CLI, its folder added to the system PATH
+    the license and notice files the archives carry
+
+  Variables (wix build -d): Version (x.y.z), BinDir (the two .exe files),
+  DocDir (the license and notice files), IconFile (swgoh-ae3.ico).
+
+  UpgradeCode identifies the product across versions: never change it, or
+  a new version installs beside the old one instead of replacing it.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="swgoh-ae3"
+      Manufacturer="swgoh-utils"
+      Version="$(Version)"
+      UpgradeCode="2C1098D4-7412-48CC-B6A9-6437384B14FB"
+      Language="1033"
+      Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of swgoh-ae3 is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="swgoh_ae3.ico" SourceFile="$(IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="swgoh_ae3.ico" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="swgoh-ae3">
+        <Component Id="Gui">
+          <File Id="ae3_gui.exe" Source="$(BinDir)\ae3-gui.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="Cli">
+          <File Id="ae3.exe" Source="$(BinDir)\ae3.exe" KeyPath="yes" />
+          <!-- Removed again on uninstall. -->
+          <Environment
+              Id="Path"
+              Name="PATH"
+              Value="[INSTALLFOLDER]"
+              Action="set"
+              Part="last"
+              System="yes"
+              Permanent="no" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <!-- One component per file: WiX generates a component's GUID only
+         when a single file is its key. -->
+    <ComponentGroup Id="Docs" Directory="INSTALLFOLDER">
+      <Component><File Id="LICENSE" Source="$(DocDir)\LICENSE" /></Component>
+      <Component><File Id="README.md" Source="$(DocDir)\README.md" /></Component>
+      <Component><File Id="CHANGELOG.md" Source="$(DocDir)\CHANGELOG.md" /></Component>
+      <Component><File Id="THIRD_PARTY_LICENSES.md" Source="$(DocDir)\THIRD-PARTY-LICENSES.md" /></Component>
+      <Component><File Id="THIRD_PARTY_NOTICES.md" Source="$(DocDir)\THIRD-PARTY-NOTICES.md" /></Component>
+      <Component><File Id="FONT_NOTICES.md" Source="$(DocDir)\FONT-NOTICES.md" /></Component>
+    </ComponentGroup>
+
+    <!-- WiX's Start menu pattern: a shortcut that is not advertised needs a
+         component of its own, keyed by a value under HKCU (ICE43). -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenu">
+        <Shortcut
+            Id="GuiShortcut"
+            Name="swgoh-ae3"
+            Description="SWGOH asset extractor"
+            Target="[INSTALLFOLDER]ae3-gui.exe"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="swgoh_ae3.ico" />
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\swgoh-ae3"
+            Name="StartMenuShortcut"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="swgoh-ae3">
+      <ComponentRef Id="Gui" />
+      <ComponentRef Id="Cli" />
+      <ComponentGroupRef Id="Docs" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+  </Package>
+</Wix>
