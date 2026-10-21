@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.4](https://github.com/MarTrepodi/swgoh-ae3/compare/v0.1.3...v0.1.4) - 2026-10-21
 
+### Added
+
+- *(release)* ship the macOS GUI as a disk image too, `swgoh-ae3-macos-arm64.dmg`: the app beside an Applications shortcut
+- *(release)* add a Windows installer, `swgoh-ae3-windows-x86_64.msi`: the GUI with a Start menu shortcut and `ae3` on the PATH
+
 ### Fixed
 
 - *(release)* link releases and update checks to the current repository
