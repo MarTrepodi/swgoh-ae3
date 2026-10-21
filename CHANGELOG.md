@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/MarTrepodi/swgoh-ae3/compare/v0.1.3...v0.1.4) - 2026-10-21
+
+### Fixed
+
+- *(release)* link releases and update checks to the current repository
+
 ## [0.1.2](https://github.com/MarTrepodi/swgoh-ae3/compare/v0.1.1...v0.1.2) - 2026-10-18
 
 ### Added
