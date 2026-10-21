@@ -1,7 +1,8 @@
 # cargo-dist custom job (local-artifacts-jobs in Cargo.toml). release.yml
 # calls it alongside its own builds; every `artifacts-*` upload ends up on
 # the GitHub Release. It ships the macOS GUI as swgoh-ae3.app, which dist cannot
-# build, so ae3-gui's dist targets leave out aarch64-apple-darwin.
+# build, so ae3-gui's dist targets leave out aarch64-apple-darwin: zipped, and
+# as a disk image (swgoh-ae3-macos-arm64.dmg).
 name: macOS app
 
 on:
@@ -50,4 +51,6 @@ jobs:
           path: |
             target/distrib/ae3-gui-aarch64-apple-darwin.zip
             target/distrib/ae3-gui-aarch64-apple-darwin.zip.sha256
+            target/distrib/swgoh-ae3-macos-arm64.dmg
+            target/distrib/swgoh-ae3-macos-arm64.dmg.sha256
           if-no-files-found: error
