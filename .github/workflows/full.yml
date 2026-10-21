@@ -3,11 +3,15 @@ name: Full CI
 # Every platform, release builds, binary size budgets, the texture oracle
 # and the UI tests (ui.yml: interaction and snapshot tests, plus an
 # end-to-end smoke run of each platform's release ae3-gui binary built
-# here). Too slow for every pull request, so it runs:
-#   - nightly, when main has code no earlier full run built
-#     (scripts/full-ci-needed.sh);
-#   - on release-plz's release pull request, so nothing ships untested;
-#   - on any pull request labelled full-ci;
+# here). Too slow, and on macOS and Windows too costly, for every push, so
+# it builds each version of the code once (scripts/full-ci-needed.sh):
+#   - nightly, when main has code no earlier full run built;
+#   - on release-plz's release pull request, unless a passing run already
+#     built its code (a release is main plus a version bump), so nothing
+#     ships untested;
+#   - once each time a pull request is labelled full-ci: the run removes
+#     the label, so later pushes (Auto-fix's too) do not rebuild; label it
+#     again for another run;
 #   - on demand (workflow_dispatch).
 # A failing nightly run opens (or comments on) a nightly-failure issue; the
 # next passing one closes it.
@@ -21,8 +25,10 @@ on:
 permissions:
   contents: read
 
+# A run the full-ci label asked for has a group of its own: a later push to
+# the pull request must not cancel it, since that push's run will not build.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && 'label' || 'push' }}
   cancel-in-progress: true
 
 env:
@@ -39,11 +45,13 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: write # to remove the full-ci label
     outputs:
       run: ${{ steps.decide.outputs.run }}
     steps:
-      # The nightly compares main's code with what earlier runs built.
-      - if: github.event_name == 'schedule'
+      # The nightly and release pull requests compare the code with what
+      # earlier runs built.
+      - if: github.event_name == 'schedule' || startsWith(github.head_ref, 'release-plz-')
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -51,14 +59,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           run=false
           case "$GITHUB_EVENT_NAME" in
             workflow_dispatch) run=true ;;
             pull_request)
-              if [[ "$HEAD_REF" == release-plz-* || " $LABELS " == *" full-ci "* ]]; then
+              if [[ "$ACTION" == labeled && "$LABEL" == full-ci ]]; then
                 run=true
+                # One run per labelling. A fork's token may not edit labels;
+                # the run goes ahead regardless.
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/full-ci" >/dev/null ||
+                  echo "::warning::Could not remove the full-ci label."
+              elif [[ "$HEAD_REF" == release-plz-* ]]; then
+                run=$(bash scripts/full-ci-needed.sh --passed "$HEAD_SHA")
               fi
               ;;
             # Only code nothing has built yet: not docs, workflows or a

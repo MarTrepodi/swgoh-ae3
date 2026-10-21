@@ -61,15 +61,15 @@ inherits = "release"
 
 # cargo-dist: `dist plan` checks this config, `dist generate` rewrites
 # .github/workflows/release.yml from it (never edit that file by hand).
-# One archive per binary per target. The macOS GUI is not in this list: the
-# macos-app custom job bundles it as AE3.app instead. The windows-msi custom
-# job adds the Windows installer, swgoh-ae3-windows-x86_64.msi.
+# One archive per binary per target. macOS is not in this list: the
+# macos-app custom job builds both binaries on one runner, bundles the GUI as
+# swgoh-ae3.app and packs the CLI archive as dist would. The windows-msi
+# custom job adds the Windows installer, swgoh-ae3-windows-x86_64.msi.
 [workspace.metadata.dist]
 cargo-dist-version = "0.33.0"
 ci = "github"
 installers = []
 targets = [
-    "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
@@ -97,7 +97,6 @@ install-updater = false
 
 # Native runners. Ubuntu 22.04 keeps the glibc floor at 2.35.
 [workspace.metadata.dist.github-custom-runners]
-aarch64-apple-darwin = "macos-14"
 aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
 x86_64-pc-windows-msvc = "windows-2022"
