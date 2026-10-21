@@ -1180,7 +1180,7 @@ mod tests {
             self.requests.set(self.requests.get() + 1);
             assert_eq!(
                 url,
-                "https://api.github.com/repos/swgoh-utils/swgoh-ae3/releases/latest"
+                "https://api.github.com/repos/MarTrepodi/swgoh-ae3/releases/latest"
             );
             self.body.map(|b| b.as_bytes().to_vec()).ok_or_else(|| {
                 ae3_core::http::HttpError::Status {

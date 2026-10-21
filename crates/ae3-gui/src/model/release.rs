@@ -330,7 +330,7 @@ mod tests {
     fn the_api_url_comes_from_the_repository() {
         assert_eq!(
             latest_release_api(REPOSITORY).as_deref(),
-            Some("https://api.github.com/repos/swgoh-utils/swgoh-ae3/releases/latest")
+            Some("https://api.github.com/repos/MarTrepodi/swgoh-ae3/releases/latest")
         );
         assert_eq!(
             latest_release_api("https://github.com/a/b.git/").as_deref(),
