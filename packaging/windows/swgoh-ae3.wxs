@@ -45,16 +45,19 @@
               System="yes"
               Permanent="no" />
         </Component>
-        <Component Id="Docs">
-          <File Id="LICENSE" Source="$(DocDir)\LICENSE" KeyPath="yes" />
-          <File Id="README.md" Source="$(DocDir)\README.md" />
-          <File Id="CHANGELOG.md" Source="$(DocDir)\CHANGELOG.md" />
-          <File Id="THIRD_PARTY_LICENSES.md" Source="$(DocDir)\THIRD-PARTY-LICENSES.md" />
-          <File Id="THIRD_PARTY_NOTICES.md" Source="$(DocDir)\THIRD-PARTY-NOTICES.md" />
-          <File Id="FONT_NOTICES.md" Source="$(DocDir)\FONT-NOTICES.md" />
-        </Component>
       </Directory>
     </StandardDirectory>
+    <!-- One component per file: WiX generates a component's GUID only
+         when a single file is its key. -->
+    <ComponentGroup Id="Docs" Directory="INSTALLFOLDER">
+      <Component><File Id="LICENSE" Source="$(DocDir)\LICENSE" /></Component>
+      <Component><File Id="README.md" Source="$(DocDir)\README.md" /></Component>
+      <Component><File Id="CHANGELOG.md" Source="$(DocDir)\CHANGELOG.md" /></Component>
+      <Component><File Id="THIRD_PARTY_LICENSES.md" Source="$(DocDir)\THIRD-PARTY-LICENSES.md" /></Component>
+      <Component><File Id="THIRD_PARTY_NOTICES.md" Source="$(DocDir)\THIRD-PARTY-NOTICES.md" /></Component>
+      <Component><File Id="FONT_NOTICES.md" Source="$(DocDir)\FONT-NOTICES.md" /></Component>
+    </ComponentGroup>
+
     <!-- WiX's Start menu pattern: a shortcut that is not advertised needs a
          component of its own, keyed by a value under HKCU (ICE43). -->
     <StandardDirectory Id="ProgramMenuFolder">
@@ -79,7 +82,7 @@
     <Feature Id="Main" Title="swgoh-ae3">
       <ComponentRef Id="Gui" />
       <ComponentRef Id="Cli" />
-      <ComponentRef Id="Docs" />
+      <ComponentGroupRef Id="Docs" />
       <ComponentRef Id="StartMenu" />
     </Feature>
   </Package>
