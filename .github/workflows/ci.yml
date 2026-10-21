@@ -66,7 +66,29 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: crate-ci/committed@v1.1.11
+      # committed itself, from the release the crate-ci/committed action
+      # downloads. The action lints every commit a pull request adds, merge
+      # commits included, and those carry Git's own "Merge branch ..."
+      # summary: bringing a branch up to date (GitHub's Update branch, or
+      # Auto-fix) merges main into it, since nothing is force-pushed. The
+      # changelog skips merge commits too, so only the others are checked.
+      - name: Install committed
+        run: |
+          archive=committed-v1.1.11-x86_64-unknown-linux-musl.tar.gz
+          curl -fsSLO "https://github.com/crate-ci/committed/releases/download/v1.1.11/$archive"
+          echo "1e5c20049eeaa4633e6798283913f92dc90a97f2b5c6dfc28e8c4b7e77a67157  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" ./committed
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Lint commit messages
+        run: |
+          # HEAD is the pull request merged into main: HEAD~ is main and
+          # HEAD^2 the pull request's head, so this is what it adds.
+          status=0
+          for commit in $(git rev-list --no-merges --reverse HEAD~..HEAD^2); do
+            git log -1 --oneline "$commit"
+            committed "$commit~..$commit" || status=1
+          done
+          exit $status
 
   fmt:
     name: rustfmt
