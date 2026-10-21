@@ -18,6 +18,11 @@ git_release_enable = false
 changelog_update = false
 # Release only when the release PR is merged, not on every push.
 release_always = false
+# Open a release PR only for a change users get: a feature, fix or speed-up.
+# release-plz otherwise releases whenever a crate's files change, so a test
+# or CI commit inside a crate made v0.1.3, a release with nothing in it.
+# Other commits ship with the next release.
+release_commits = "^(feat|fix|perf)"
 semver_check = false
 dependencies_update = false
 pr_labels = ["release"]
