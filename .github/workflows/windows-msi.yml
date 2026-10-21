@@ -1,0 +1,110 @@
+# cargo-dist custom job (local-artifacts-jobs in Cargo.toml). release.yml
+# calls it alongside its own builds; every `artifacts-*` upload ends up on
+# the GitHub Release. It builds swgoh-ae3-windows-x86_64.msi, which installs
+# ae3-gui with a Start menu shortcut and ae3 on the PATH
+# (packaging/windows/), then installs and uninstalls it to check both.
+#
+# It also runs on pull requests that change the installer, and on demand,
+# so the installer is tested before a release needs it; those runs take the
+# version from Cargo.toml and publish nothing.
+name: Windows installer
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - packaging/windows/**
+      - .github/workflows/windows-msi.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msi:
+    name: swgoh-ae3.msi (Windows x86_64)
+    runs-on: windows-2022
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+
+      # The same steps dist runs from .github/build-setup.yml.
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      - name: Generate THIRD-PARTY-LICENSES.md
+        shell: bash
+        run: |
+          cargo fetch --locked
+          cargo about generate --workspace --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
+
+      - name: Build ae3 and ae3-gui
+        run: cargo build --profile dist --locked -p ae3 -p ae3-gui --target x86_64-pc-windows-msvc
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build swgoh-ae3-windows-x86_64.msi
+        shell: pwsh
+        run: |
+          if ($env:PLAN) {
+            $version = ($env:PLAN | ConvertFrom-Json).releases |
+              Where-Object app_name -eq 'ae3-gui' | Select-Object -First 1 -ExpandProperty app_version
+          } else {
+            $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+              Where-Object name -eq 'ae3-gui' | Select-Object -ExpandProperty version
+          }
+          packaging/windows/build-msi.ps1 -Version $version `
+            -BinDir target/x86_64-pc-windows-msvc/dist -OutDir target/distrib
+
+      # Installs silently, checks every piece, then uninstalls and checks
+      # that nothing is left behind.
+      - name: Install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Resolve-Path target/distrib/swgoh-ae3-windows-x86_64.msi).Path
+          $dir = Join-Path $env:ProgramFiles 'swgoh-ae3'
+          $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\swgoh-ae3.lnk'
+          function Invoke-Msiexec([string[]]$arguments, [string]$log) {
+            $p = Start-Process msiexec -ArgumentList ($arguments + @('/qn', '/l*v', $log)) -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              Get-Content $log -Tail 60
+              throw "msiexec $($arguments[0]) exited with $($p.ExitCode)"
+            }
+          }
+          function Get-MachinePath { [Environment]::GetEnvironmentVariable('PATH', 'Machine') }
+
+          Invoke-Msiexec @('/i', $msi) install.log
+          foreach ($file in 'ae3-gui.exe', 'ae3.exe', 'LICENSE', 'THIRD-PARTY-LICENSES.md', 'FONT-NOTICES.md') {
+            if (-not (Test-Path (Join-Path $dir $file))) { throw "not installed: $file" }
+          }
+          if (-not (Test-Path $lnk)) { throw "no Start menu shortcut at $lnk" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if ($target -ne (Join-Path $dir 'ae3-gui.exe')) { throw "the shortcut targets $target" }
+          if ((Get-MachinePath) -notlike "*$dir*") { throw "$dir is not on the system PATH" }
+          & (Join-Path $dir 'ae3.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw "ae3 --version exited with $LASTEXITCODE" }
+
+          Invoke-Msiexec @('/x', $msi) uninstall.log
+          if (Test-Path $dir) { throw "$dir is left after uninstall" }
+          if (Test-Path $lnk) { throw "the Start menu shortcut is left after uninstall" }
+          if ((Get-MachinePath) -like "*$dir*") { throw "$dir is left on the system PATH" }
+          Write-Host "installed, checked and uninstalled $msi"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-windows-msi
+          path: |
+            target/distrib/swgoh-ae3-windows-x86_64.msi
+            target/distrib/swgoh-ae3-windows-x86_64.msi.sha256
+          if-no-files-found: error

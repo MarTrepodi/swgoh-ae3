@@ -59,7 +59,8 @@ inherits = "release"
 # cargo-dist: `dist plan` checks this config, `dist generate` rewrites
 # .github/workflows/release.yml from it (never edit that file by hand).
 # One archive per binary per target. The macOS GUI is not in this list: the
-# macos-app custom job bundles it as AE3.app instead.
+# macos-app custom job bundles it as AE3.app instead. The windows-msi custom
+# job adds the Windows installer, swgoh-ae3-windows-x86_64.msi.
 [workspace.metadata.dist]
 cargo-dist-version = "0.33.0"
 ci = "github"
@@ -81,12 +82,13 @@ include = [
     "THIRD-PARTY-LICENSES.md",
 ]
 github-build-setup = "../build-setup.yml"
-local-artifacts-jobs = ["./macos-app"]
+local-artifacts-jobs = ["./macos-app", "./windows-msi"]
 pr-run-mode = "plan"
 # release.yml carries one hand edit: its host job publishes with the release
 # token, which may create releases on commits that differ from main in
 # .github/workflows/ (GITHUB_TOKEN may not). dist cannot express that, so it
-# is told not to treat the edited file as out of date.
+# is told not to treat the edited file as out of date. Its custom-windows-msi
+# job was added by hand too, written as dist generates custom-macos-app.
 allow-dirty = ["ci"]
 install-updater = false
 
