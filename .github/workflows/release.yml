@@ -312,6 +312,11 @@ jobs:
         run: |
           # Write and read notes from a file to avoid quoting breaking things
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          # Hand edit (dist allow-dirty = ["ci"] in Cargo.toml): dist's Download
+          # tables list only what dist built; add the custom jobs' downloads
+          # (macOS app and disk image, macOS CLI, Windows installer). Keep this
+          # line after `dist generate`.
+          scripts/add-custom-downloads.sh "$RUNNER_TEMP/notes.txt" "${{ needs.plan.outputs.tag }}" artifacts
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 

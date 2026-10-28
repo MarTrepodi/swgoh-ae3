@@ -91,7 +91,9 @@ pr-run-mode = "plan"
 # token, which may create releases on commits that differ from main in
 # .github/workflows/ (GITHUB_TOKEN may not). dist cannot express that, so it
 # is told not to treat the edited file as out of date. Its custom-windows-msi
-# job was added by hand too, written as dist generates custom-macos-app.
+# job was added by hand too, written as dist generates custom-macos-app, and
+# its release step adds the custom jobs' downloads to the release notes'
+# Download tables (scripts/add-custom-downloads.sh).
 allow-dirty = ["ci"]
 install-updater = false
 
