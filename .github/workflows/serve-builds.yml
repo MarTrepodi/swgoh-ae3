@@ -7,7 +7,9 @@
 # - In a release: release.yml calls it as a cargo-dist custom job
 #   (local-artifacts-jobs in Cargo.toml), like macos-app.yml. The uploads are
 #   named artifacts-serve-<target>, so the release attaches them, and
-#   scripts/add-custom-downloads.sh lists them in the release notes.
+#   scripts/add-custom-downloads.sh lists them in the release notes. It
+#   leaves out macOS there: macos-app.yml packs that archive on the macOS
+#   runner the release already starts.
 #
 # The builds match release.yml's: the dist profile, the same native runners
 # (Ubuntu 22.04 keeps the glibc floor at 2.35), and the same files beside the
@@ -37,30 +39,30 @@ permissions:
 
 jobs:
   build:
-    name: ae3 serve (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+    name: ae3 serve (${{ fromJSON('{"x86_64-pc-windows-msvc":"Windows x86_64","aarch64-apple-darwin":"macOS arm64","x86_64-unknown-linux-gnu":"Linux x86_64","aarch64-unknown-linux-gnu":"Linux aarch64"}')[matrix.target] }})
+    runs-on: ${{ fromJSON('{"x86_64-pc-windows-msvc":"windows-2022","aarch64-apple-darwin":"macos-14","x86_64-unknown-linux-gnu":"ubuntu-22.04","aarch64-unknown-linux-gnu":"ubuntu-22.04-arm"}')[matrix.target] }}
     strategy:
       fail-fast: false
+      # Runners and names are looked up by target rather than listed under
+      # include: GitHub adds an include entry back as a job of its own when
+      # exclude has removed the combination it would extend.
       matrix:
-        include:
-          - name: Windows x86_64
-            target: x86_64-pc-windows-msvc
-            runner: windows-2022
-            exe: .exe
-          - name: macOS arm64
-            target: aarch64-apple-darwin
-            runner: macos-14
-          - name: Linux x86_64
-            target: x86_64-unknown-linux-gnu
-            runner: ubuntu-22.04
-          - name: Linux aarch64
-            target: aarch64-unknown-linux-gnu
-            runner: ubuntu-22.04-arm
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+        mode:
+          - ${{ inputs.plan && 'release' || 'on-demand' }}
+        exclude:
+          - target: aarch64-apple-darwin
+            mode: release
     defaults:
       run:
         shell: bash
     env:
       ARCHIVE: ae3-serve-${{ matrix.target }}
+      EXE: ${{ contains(matrix.target, 'windows') && '.exe' || '' }}
     steps:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
@@ -88,7 +90,7 @@ jobs:
       # have the serve command, or the archive is useless.
       - name: Check the binary serves
         run: |
-          bin=target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}
+          bin=target/${{ matrix.target }}/dist/ae3$EXE
           "$bin" --version
           "$bin" serve --help > /dev/null
 
@@ -99,7 +101,7 @@ jobs:
           stage="$RUNNER_TEMP/stage/$ARCHIVE"
           out="$GITHUB_WORKSPACE/target/distrib"
           mkdir -p "$stage" "$out"
-          cp "target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" "$stage/"
+          cp "target/${{ matrix.target }}/dist/ae3$EXE" "$stage/"
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md \
             crates/ae3-audio/THIRD-PARTY-NOTICES.md "$stage/"
           # No builder's user name in the archive; on macOS (bsdtar), no
@@ -122,9 +124,9 @@ jobs:
             shasum -a 256 -b "$file" > "$file.sha256"
           fi
           {
-            echo "### ${{ matrix.name }}"
+            echo "### ${{ matrix.target }}"
             echo
-            echo "\`$file\` ($(du -h "$file" | cut -f1)), $("$GITHUB_WORKSPACE/target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" --version), commit \`$(git -C "$GITHUB_WORKSPACE" rev-parse --short=7 HEAD)\`"
+            echo "\`$file\` ($(du -h "$file" | cut -f1)), $("$GITHUB_WORKSPACE/target/${{ matrix.target }}/dist/ae3$EXE" --version), commit \`$(git -C "$GITHUB_WORKSPACE" rev-parse --short=7 HEAD)\`"
             echo
             echo "\`\`\`text"
             cat "$file.sha256"

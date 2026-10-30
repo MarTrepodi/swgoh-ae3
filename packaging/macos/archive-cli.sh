@@ -3,22 +3,24 @@
 # dist makes on the other platforms: a top-level folder holding the binary
 # and the license files.
 #
-#   packaging/macos/archive-cli.sh <ae3 binary> <output dir>
+#   packaging/macos/archive-cli.sh <ae3 binary> <output dir> [name]
 #
-# Writes <output dir>/ae3-aarch64-apple-darwin.tar.xz and its .sha256. The
-# macOS release job builds ae3 beside ae3-gui, so the release needs one macOS
-# runner instead of two. Run from the repository root, after
-# THIRD-PARTY-LICENSES.md is generated.
+# Writes <output dir>/<name>.tar.xz and its .sha256; <name> defaults to
+# ae3-aarch64-apple-darwin, and the build with the HTTP API passes
+# ae3-serve-aarch64-apple-darwin. The macOS release job builds both beside
+# ae3-gui, so the release needs one macOS runner instead of several. Run
+# from the repository root, after THIRD-PARTY-LICENSES.md is generated for
+# the binary being packed.
 set -euo pipefail
 
-if (( $# != 2 )); then
-  echo "usage: $0 <ae3 binary> <output dir>" >&2
+if (( $# < 2 || $# > 3 )); then
+  echo "usage: $0 <ae3 binary> <output dir> [name]" >&2
   exit 2
 fi
 binary=$1
 mkdir -p "$2"
 out=$(cd "$2" && pwd)
-name=ae3-aarch64-apple-darwin
+name=${3:-ae3-aarch64-apple-darwin}
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
