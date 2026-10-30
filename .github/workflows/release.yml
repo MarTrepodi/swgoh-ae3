@@ -192,6 +192,15 @@ jobs:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
 
+  custom-serve-builds:
+    needs:
+      - plan
+    if: ${{ needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload' }}
+    uses: ./.github/workflows/serve-builds.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
     needs:
@@ -199,6 +208,7 @@ jobs:
       - build-local-artifacts
       - custom-macos-app
       - custom-windows-msi
+      - custom-serve-builds
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -247,9 +257,10 @@ jobs:
       - build-local-artifacts
       - custom-macos-app
       - custom-windows-msi
+      - custom-serve-builds
       - build-global-artifacts
     # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') && (needs.custom-macos-app.result == 'skipped' || needs.custom-macos-app.result == 'success') && (needs.custom-windows-msi.result == 'skipped' || needs.custom-windows-msi.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') && (needs.custom-macos-app.result == 'skipped' || needs.custom-macos-app.result == 'success') && (needs.custom-windows-msi.result == 'skipped' || needs.custom-windows-msi.result == 'success') && (needs.custom-serve-builds.result == 'skipped' || needs.custom-serve-builds.result == 'success') }}
     env:
       # Hand edit (dist allow-dirty = ["ci"] in Cargo.toml): GitHub refuses
       # to let GITHUB_TOKEN create a release whose commit differs from the
@@ -314,8 +325,8 @@ jobs:
           echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
           # Hand edit (dist allow-dirty = ["ci"] in Cargo.toml): dist's Download
           # tables list only what dist built; add the custom jobs' downloads
-          # (macOS app and disk image, macOS CLI, Windows installer). Keep this
-          # line after `dist generate`.
+          # (macOS app and disk image, macOS CLI, Windows installer, and ae3
+          # with the HTTP API). Keep this line after `dist generate`.
           scripts/add-custom-downloads.sh "$RUNNER_TEMP/notes.txt" "${{ needs.plan.outputs.tag }}" artifacts
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
