@@ -1,0 +1,113 @@
+site_name: swgoh-ae3
+site_description: Find, preview and export Star Wars Galaxy of Heroes game assets from the command line, an HTTP API or a desktop app.
+site_url: https://martrepodi.github.io/swgoh-ae3/
+repo_url: https://github.com/MarTrepodi/swgoh-ae3
+repo_name: MarTrepodi/swgoh-ae3
+edit_uri: ""
+copyright: >-
+  AE3 is an unofficial community tool, not affiliated with or endorsed by
+  Electronic Arts, Capital Games or Lucasfilm.
+
+docs_dir: content
+site_dir: build
+strict: true
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  font:
+    text: Ubuntu
+    code: Ubuntu Mono
+  # The "holo" skin (stylesheets/holo.css) supplies the custom colours: the
+  # desktop GUI's palette. Dark comes first so it is the fallback.
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install: getting-started/install.md
+      - Quick start: getting-started/quick-start.md
+      - Concepts: concepts.md
+  - Guides:
+      - guides/index.md
+      - Identify assets from game data: guides/identify-assets.md
+      - Locate assets in bundles: guides/locate-assets.md
+      - Extract assets: guides/extract-assets.md
+      - Unit thumbnails: guides/unit-thumbnails.md
+      - Ability and relic materials: guides/upgrade-materials.md
+      - Track new assets between releases: guides/track-new-assets.md
+      - Scripting and automation: guides/scripting.md
+  - Reference:
+      - Command line: reference/cli.md
+      - HTTP API: reference/http-api.md
+      - Desktop GUI: reference/gui.md
+      - Configuration: reference/configuration.md
+      - Output files: reference/output-files.md
+  - Migrating from swgoh-ae2: migrating-from-ae2.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/MarTrepodi/swgoh-ae3
+
+extra_css:
+  - stylesheets/holo.css
