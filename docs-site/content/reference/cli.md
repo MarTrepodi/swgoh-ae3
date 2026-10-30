@@ -479,8 +479,8 @@ Asset Indexes   1 (5.0 MB)
 ## serve
 
 Run the [HTTP API](http-api.md). Only in builds made with
-`--features serve`, such as the `ae3-serve-…` downloads from the
-**HTTP API builds** workflow; see
+`--features serve`, such as the `ae3-serve-…` downloads on each
+release; see
 [Get the HTTP API](../getting-started/install.md#get-the-http-api).
 
 ```text

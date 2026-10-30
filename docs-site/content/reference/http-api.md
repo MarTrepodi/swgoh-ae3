@@ -5,9 +5,9 @@ same three routes and parameters, so programs written for swgoh-ae2's
 server can point at AE3 unchanged.
 
 !!! info "Getting a build with `serve`"
-    The release downloads don't include the HTTP API. Download an
-    `ae3-serve-…` build from the **HTTP API builds** workflow, or build it
-    with `cargo build --release -p ae3 --features serve`; see
+    The plain `ae3` downloads don't include the HTTP API. Download the
+    `ae3-serve-…` file for your platform from a release (v0.1.4 or later),
+    or build it with `cargo build --release -p ae3 --features serve`; see
     [Install](../getting-started/install.md#get-the-http-api).
 
 ## Start the server
