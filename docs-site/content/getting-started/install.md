@@ -1,0 +1,131 @@
+# Install
+
+Pre-built programs are published on the
+[Releases page](https://github.com/MarTrepodi/swgoh-ae3/releases). The
+command-line tool (`ae3`) and the desktop app (`ae3-gui`) are separate
+downloads; install one or both. Neither needs .NET, Python or any other
+runtime.
+
+## Pick your download
+
+| Platform | Command line | Desktop app |
+|---|---|---|
+| Windows x86_64 | `ae3-x86_64-pc-windows-msvc.zip` → `ae3.exe` | `swgoh-ae3-windows-x86_64.msi` (installs both), or `ae3-gui-x86_64-pc-windows-msvc.zip` → `ae3-gui.exe` |
+| macOS, Apple silicon | `ae3-aarch64-apple-darwin.tar.xz` → `ae3` | `swgoh-ae3-macos-arm64.dmg`, or `ae3-gui-aarch64-apple-darwin.zip` → `swgoh-ae3.app` |
+| Linux x86_64 | `ae3-x86_64-unknown-linux-gnu.tar.xz` → `ae3` | `ae3-gui-x86_64-unknown-linux-gnu.tar.xz` → `ae3-gui` |
+| Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` → `ae3` | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` → `ae3-gui` |
+
+Each download has a `.sha256` file beside it on the release page for
+checking the download.
+
+=== "Windows"
+
+    **Installer (recommended).** Run `swgoh-ae3-windows-x86_64.msi`. It
+    installs both programs for all users into `C:\Program Files\swgoh-ae3`,
+    adds a **swgoh-ae3** Start menu shortcut for the desktop app, and puts
+    the folder on the system `PATH`, so `ae3` works in any *new* terminal.
+
+    ```powershell
+    ae3 --version
+    ```
+
+    Installing a newer version replaces the old one. Uninstall from
+    **Settings → Apps**.
+
+    **Zip.** Extract `ae3.exe` (and/or `ae3-gui.exe`) anywhere. To run `ae3`
+    from any folder, add that folder to your `PATH`.
+
+    !!! warning "SmartScreen"
+        Early releases are not code-signed, so SmartScreen may warn on first
+        launch. Choose **More info → Run anyway**.
+
+=== "macOS"
+
+    **Disk image.** Open `swgoh-ae3-macos-arm64.dmg` and drag
+    `swgoh-ae3.app` onto the Applications shortcut.
+
+    **Command line.** Extract the archive and move `ae3` onto your `PATH`:
+
+    ```bash
+    tar -xf ae3-aarch64-apple-darwin.tar.xz
+    sudo mv ae3-aarch64-apple-darwin/ae3 /usr/local/bin/
+    ```
+
+    !!! warning "First launch is blocked"
+        Early releases are signed ad hoc only, so macOS blocks the first
+        launch. Open **System Settings → Privacy & Security** and choose
+        **Open Anyway**, or clear the download quarantine first:
+
+        ```bash
+        xattr -dr com.apple.quarantine /Applications/swgoh-ae3.app
+        ```
+
+        ```bash
+        xattr -dr com.apple.quarantine /usr/local/bin/ae3
+        ```
+
+=== "Linux"
+
+    The Linux builds need glibc 2.35 or newer (Ubuntu 22.04, Debian 12,
+    Fedora 36 or later).
+
+    ```bash
+    tar -xf ae3-x86_64-unknown-linux-gnu.tar.xz
+    install -Dm755 ae3-x86_64-unknown-linux-gnu/ae3 ~/.local/bin/ae3
+    ```
+
+    The desktop app also needs the ALSA library (`libasound.so.2`, package
+    `libasound2` or `alsa-lib`), which desktop distributions install by
+    default. To add it to your application menu, run this from the
+    extracted GUI folder:
+
+    ```bash
+    install -Dm755 ae3-gui ~/.local/bin/ae3-gui && install -Dm644 ae3-gui.desktop ~/.local/share/applications/ae3-gui.desktop && install -Dm644 swgoh-ae3.png ~/.local/share/icons/hicolor/256x256/apps/swgoh-ae3.png
+    ```
+
+    `~/.local/bin` must be on your `PATH`.
+
+## Check it works
+
+```bash
+ae3 version
+```
+
+```text
+Asset Version  100056 (github-meta)
+Environment    PROD
+Platform       Windows
+Manifest       https://eaassets-a.akamaihd.net/assetssw.capitalgames.com/PROD/100056/Windows/ETC/manifest.data
+```
+
+AE3 has found the game's latest asset version and where its files are
+served from. Your version number will be newer.
+
+## Get the HTTP API
+
+The HTTP API (`ae3 serve`) is an optional feature that the release
+downloads **do not include**. Build it from source:
+
+1. Install Rust with [rustup](https://rustup.rs). The repository pins the
+   toolchain it needs, and rustup installs it automatically.
+2. Build the CLI with the `serve` feature:
+
+    ```bash
+    git clone https://github.com/MarTrepodi/swgoh-ae3.git
+    cd swgoh-ae3
+    cargo build --release -p ae3 --features serve
+    ```
+
+3. The binary is `target/release/ae3` (`ae3.exe` on Windows). Check that it
+   has the command:
+
+    ```bash
+    target/release/ae3 serve --help
+    ```
+
+On Linux, building the desktop app as well needs the ALSA headers
+(`libasound2-dev` on Debian and Ubuntu, `alsa-lib-devel` on Fedora).
+
+## Next
+
+Go to the [Quick start](quick-start.md).

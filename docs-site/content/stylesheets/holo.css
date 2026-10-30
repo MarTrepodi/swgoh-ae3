@@ -1,0 +1,329 @@
+/*
+ * "Holo" skin for Material for MkDocs: the desktop GUI's palette
+ * (crates/ae3-gui/src/ui/theme.rs) with a holographic-display feel.
+ * Dark is the `slate` scheme, light is `default`; both use primary and
+ * accent "custom" so these variables win over Material's presets.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Oxanium:wght@500;600;700&family=Orbitron:wght@600&display=swap");
+
+/* Plain fallbacks, not var(--md-text-font-family): Material defines that on
+ * <body>, so referencing it from :root would make these invalid. */
+:root {
+  --holo-heading-font: "Oxanium", "Ubuntu", -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  --holo-title-font: "Orbitron", "Oxanium", "Ubuntu", -apple-system, Helvetica, Arial, sans-serif;
+}
+
+/* ---------- Dark: the GUI's dark palette ---------- */
+
+[data-md-color-scheme="slate"] {
+  --holo-chrome: #15181c;
+  --holo-canvas: #1b1f24;
+  --holo-card: #22272e;
+  --holo-raised: #2b3139;
+  --holo-inset: #14171b;
+  --holo-border: #303741;
+  --holo-border-strong: #48525f;
+  --holo-text: #dce1e7;
+  --holo-text-strong: #f3f5f8;
+  --holo-text-muted: #9aa4b1;
+  --holo-accent: #2bb8e3;
+  --holo-accent-hover: #4cc8ee;
+  --holo-accent-text: #5cd3f5;
+  --holo-accent-tint: #163746;
+  --holo-accent-border: #1f566c;
+  --holo-amber: #f2b650;
+  --holo-glow: 0 0 0.6rem rgb(43 184 227 / 35%);
+  --holo-glow-text: 0 0 0.9rem rgb(92 211 245 / 45%);
+
+  --md-hue: 212;
+  --md-default-bg-color: var(--holo-canvas);
+  --md-default-bg-color--light: rgb(27 31 36 / 54%);
+  --md-default-fg-color: var(--holo-text);
+  --md-default-fg-color--light: var(--holo-text-muted);
+  --md-default-fg-color--lighter: rgb(154 164 177 / 50%);
+  --md-default-fg-color--lightest: rgb(154 164 177 / 16%);
+  --md-typeset-color: var(--holo-text);
+  --md-typeset-a-color: var(--holo-accent-text);
+  --md-code-bg-color: var(--holo-inset);
+  --md-code-fg-color: var(--holo-text);
+  --md-footer-bg-color: var(--holo-chrome);
+  --md-footer-bg-color--dark: #101215;
+  --md-typeset-table-color: var(--holo-border);
+  --md-typeset-kbd-color: var(--holo-raised);
+  --md-typeset-kbd-accent-color: var(--holo-border-strong);
+  --md-typeset-kbd-border-color: var(--holo-inset);
+  --md-admonition-bg-color: var(--holo-card);
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--holo-chrome);
+  --md-primary-fg-color--light: var(--holo-card);
+  --md-primary-fg-color--dark: #101215;
+  --md-primary-bg-color: var(--holo-text-strong);
+  --md-primary-bg-color--light: var(--holo-text-muted);
+}
+
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--holo-accent-hover);
+  --md-accent-fg-color--transparent: rgb(43 184 227 / 12%);
+  --md-accent-bg-color: #06141a;
+}
+
+/* ---------- Light: the GUI's light palette ---------- */
+
+[data-md-color-scheme="default"] {
+  --holo-chrome: #e8ecf0;
+  --holo-canvas: #f2f4f7;
+  --holo-card: #ffffff;
+  --holo-raised: #eceff3;
+  --holo-inset: #f6f8fa;
+  --holo-border: #d2d8df;
+  --holo-border-strong: #a9b3bf;
+  --holo-text: #1a1f26;
+  --holo-text-strong: #0b0e12;
+  --holo-text-muted: #5a6472;
+  --holo-accent: #0b79a6;
+  --holo-accent-hover: #096a92;
+  --holo-accent-text: #0a6f99;
+  --holo-accent-tint: #d7eef8;
+  --holo-accent-border: #9cd2ea;
+  --holo-amber: #8f5300;
+  --holo-glow: 0 0 0 transparent;
+  --holo-glow-text: none;
+
+  --md-default-bg-color: var(--holo-canvas);
+  --md-default-fg-color: var(--holo-text);
+  --md-default-fg-color--light: var(--holo-text-muted);
+  --md-typeset-color: var(--holo-text);
+  --md-typeset-a-color: var(--holo-accent-text);
+  --md-code-bg-color: var(--holo-inset);
+  --md-footer-bg-color: #1b1f24;
+  --md-footer-bg-color--dark: #15181c;
+  --md-admonition-bg-color: var(--holo-card);
+}
+
+[data-md-color-scheme="default"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--holo-chrome);
+  --md-primary-fg-color--light: var(--holo-raised);
+  --md-primary-fg-color--dark: #d5dce4;
+  --md-primary-bg-color: var(--holo-text-strong);
+  --md-primary-bg-color--light: var(--holo-text-muted);
+}
+
+[data-md-color-scheme="default"][data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--holo-accent-hover);
+  --md-accent-fg-color--transparent: rgb(11 121 166 / 10%);
+  --md-accent-bg-color: #ffffff;
+}
+
+/* ---------- Starfield (dark only) ----------
+ * Three tiled layers of single-pixel stars at different spacings, fixed
+ * behind the page. Pure CSS: no image to download or license. */
+
+/* Material sets the scheme attribute on <body> itself. */
+body[data-md-color-scheme="slate"] {
+  background-color: var(--holo-canvas);
+  background-image:
+    radial-gradient(1px 1px at 23px 41px, rgb(220 225 231 / 55%), transparent),
+    radial-gradient(1px 1px at 151px 97px, rgb(92 211 245 / 45%), transparent),
+    radial-gradient(1px 1px at 83px 173px, rgb(220 225 231 / 35%), transparent),
+    radial-gradient(1.5px 1.5px at 197px 211px, rgb(243 245 248 / 50%), transparent),
+    radial-gradient(1px 1px at 311px 29px, rgb(220 225 231 / 30%), transparent),
+    radial-gradient(1px 1px at 269px 263px, rgb(92 211 245 / 30%), transparent);
+  background-size: 223px 239px, 331px 307px, 401px 419px;
+  background-attachment: fixed;
+}
+
+/* Keep long reading areas calm: the article sits on a faint panel. */
+[data-md-color-scheme="slate"] .md-main__inner > .md-content {
+  background: rgb(27 31 36 / 82%);
+  border-inline: 1px solid rgb(48 55 65 / 60%);
+}
+
+/* ---------- Header and tabs ---------- */
+
+.md-header {
+  border-bottom: 1px solid var(--holo-accent-border);
+  box-shadow: var(--holo-glow);
+}
+
+.md-header__topic:first-child .md-ellipsis {
+  font-family: var(--holo-title-font);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.md-tabs {
+  background-color: var(--holo-chrome);
+  color: var(--holo-text);
+  border-bottom: 1px solid var(--holo-border);
+}
+
+.md-tabs__link--active,
+.md-tabs__item--active .md-tabs__link {
+  color: var(--holo-accent-text);
+  text-shadow: var(--holo-glow-text);
+}
+
+.md-search__form {
+  background-color: var(--holo-card);
+  border: 1px solid var(--holo-border);
+}
+
+/* ---------- Headings ---------- */
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: var(--holo-heading-font);
+  letter-spacing: 0.02em;
+}
+
+.md-typeset h1 {
+  color: var(--holo-text-strong);
+  font-weight: 700;
+  text-shadow: var(--holo-glow-text);
+}
+
+.md-typeset h2 {
+  font-weight: 600;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--holo-border);
+}
+
+/* A short cyan bar under each section heading, like a GUI section rule. */
+.md-typeset h2::after {
+  content: "";
+  display: block;
+  width: 2.5rem;
+  height: 2px;
+  margin-top: 0.3em;
+  margin-bottom: -0.3em;
+  background: var(--holo-accent);
+  box-shadow: var(--holo-glow);
+}
+
+/* ---------- Code ---------- */
+
+.md-typeset pre > code,
+.md-typeset .highlight {
+  border-radius: 0.3rem;
+}
+
+.md-typeset pre {
+  border: 1px solid var(--holo-border);
+  border-radius: 0.3rem;
+}
+
+.md-typeset :not(pre) > code {
+  border: 1px solid var(--holo-border);
+}
+
+/* ---------- Content tabs: the GUI's segmented buttons ---------- */
+
+.md-typeset .tabbed-labels > label {
+  font-family: var(--holo-heading-font);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.md-typeset .tabbed-set > input:checked + label,
+.md-typeset .tabbed-labels > label:hover {
+  color: var(--holo-accent-text);
+}
+
+.md-typeset .tabbed-labels::before {
+  background: var(--holo-accent);
+  box-shadow: var(--holo-glow);
+}
+
+/* ---------- Tables ---------- */
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--holo-border);
+  border-radius: 0.3rem;
+  background-color: var(--holo-card);
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--holo-raised);
+  color: var(--holo-text-strong);
+  font-family: var(--holo-heading-font);
+  letter-spacing: 0.02em;
+}
+
+.md-typeset table:not([class]) tr:hover {
+  background-color: var(--holo-accent-tint);
+  box-shadow: none;
+}
+
+/* ---------- Home page cards ---------- */
+
+.md-typeset .grid.cards > ul > li {
+  background-color: var(--holo-card);
+  border: 1px solid var(--holo-border);
+  border-radius: 0.4rem;
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--holo-accent);
+  box-shadow: var(--holo-glow);
+}
+
+.md-typeset .grid.cards .twemoji,
+.md-typeset .grid.cards svg {
+  color: var(--holo-accent-text);
+}
+
+/* ---------- Admonitions, plus a custom "holocron" type ---------- */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-width: 1px;
+  border-left-width: 0.2rem;
+  border-radius: 0.3rem;
+  background-color: var(--holo-card);
+}
+
+:root {
+  --md-admonition-icon--holocron: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zm0 2.3L18.7 8 12 11.7 5.3 8zM5 9.7l6 3.3v6.7l-6-3.3zm8 10v-6.7l6-3.3v6.7z"/></svg>');
+}
+
+.md-typeset .admonition.holocron,
+.md-typeset details.holocron {
+  border-color: var(--holo-accent);
+  box-shadow: var(--holo-glow);
+}
+
+.md-typeset .holocron > .admonition-title,
+.md-typeset .holocron > summary {
+  background-color: var(--holo-accent-tint);
+  font-family: var(--holo-heading-font);
+  letter-spacing: 0.03em;
+}
+
+.md-typeset .holocron > .admonition-title::before,
+.md-typeset .holocron > summary::before {
+  background-color: var(--holo-accent-text);
+  -webkit-mask-image: var(--md-admonition-icon--holocron);
+  mask-image: var(--md-admonition-icon--holocron);
+}
+
+/* ---------- Images: GUI screenshots framed like a display ---------- */
+
+.md-typeset img[src*="assets/gui/"] {
+  border: 1px solid var(--holo-border-strong);
+  border-radius: 0.4rem;
+  box-shadow: var(--holo-glow);
+}
+
+/* ---------- Respect reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .md-typeset .grid.cards > ul > li {
+    transition: none;
+  }
+}

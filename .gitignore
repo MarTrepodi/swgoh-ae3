@@ -18,6 +18,7 @@
 !/committed.toml
 !/.githooks/
 !/scripts/
+!/docs-site/
 
 # Build output, wherever it appears
 target/
