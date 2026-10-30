@@ -104,27 +104,86 @@ served from. Your version number will be newer.
 ## Get the HTTP API
 
 The HTTP API (`ae3 serve`) is an optional feature that the release
-downloads **do not include**. Build it from source:
+downloads **do not include**. The **HTTP API builds** workflow builds an
+`ae3` that has it, for the same four platforms as the releases:
 
-1. Install Rust with [rustup](https://rustup.rs). The repository pins the
-   toolchain it needs, and rustup installs it automatically.
-2. Build the CLI with the `serve` feature:
+| Platform | Download | Contains |
+|---|---|---|
+| Windows x86_64 | `ae3-serve-x86_64-pc-windows-msvc.zip` | `ae3.exe` |
+| macOS, Apple silicon | `ae3-serve-aarch64-apple-darwin.tar.xz` | `ae3-serve-aarch64-apple-darwin/ae3` |
+| Linux x86_64 | `ae3-serve-x86_64-unknown-linux-gnu.tar.xz` | `ae3-serve-x86_64-unknown-linux-gnu/ae3` |
+| Linux aarch64 | `ae3-serve-aarch64-unknown-linux-gnu.tar.xz` | `ae3-serve-aarch64-unknown-linux-gnu/ae3` |
+
+Each also holds the license files, as the release downloads do, and has a
+`.sha256` checksum beside it. These builds are workflow artifacts, not
+releases: they are kept for 14 days by default, and downloading them needs
+a GitHub account.
+
+=== "GitHub website"
+
+    1. Open the repository's
+       [**Actions → HTTP API builds**](https://github.com/MarTrepodi/swgoh-ae3/actions/workflows/serve-builds.yml)
+       page and pick the latest run with a green check.
+    2. Under **Artifacts** at the bottom of the run, download
+       `ae3-serve-<your platform>`. GitHub delivers it as a `.zip` holding
+       the archive and its `.sha256`.
+    3. Unzip it, then extract the archive inside as in
+       [Pick your download](#pick-your-download).
+
+    No recent run, or the builds have expired? Anyone with write access to
+    the repository can start one with **Run workflow** on the same page.
+
+=== "gh CLI"
+
+    With the [GitHub CLI](https://cli.github.com), signed in:
 
     ```bash
-    git clone https://github.com/MarTrepodi/swgoh-ae3.git
-    cd swgoh-ae3
-    cargo build --release -p ae3 --features serve
+    run=$(gh run list --repo MarTrepodi/swgoh-ae3 --workflow serve-builds.yml \
+      --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+    gh run download "$run" --repo MarTrepodi/swgoh-ae3 -n ae3-serve-x86_64-unknown-linux-gnu
     ```
 
-3. The binary is `target/release/ae3` (`ae3.exe` on Windows). Check that it
-   has the command:
+    Swap in your platform's name from the table. `gh run download` unzips the
+    artifact, leaving the archive and its `.sha256` in the current folder.
+    Check and extract it:
 
     ```bash
-    target/release/ae3 serve --help
+    sha256sum -c ae3-serve-x86_64-unknown-linux-gnu.tar.xz.sha256
+    tar -xf ae3-serve-x86_64-unknown-linux-gnu.tar.xz
     ```
 
-On Linux, building the desktop app as well needs the ALSA headers
-(`libasound2-dev` on Debian and Ubuntu, `alsa-lib-devel` on Fedora).
+    (On macOS, `shasum -a 256 -c` instead of `sha256sum -c`.) To start a new
+    build, if you have write access:
+
+    ```bash
+    gh workflow run serve-builds.yml --repo MarTrepodi/swgoh-ae3 --ref main
+    ```
+
+=== "Build from source"
+
+    1. Install Rust with [rustup](https://rustup.rs). The repository pins
+       the toolchain it needs, and rustup installs it automatically.
+    2. Build the CLI with the `serve` feature:
+
+        ```bash
+        git clone https://github.com/MarTrepodi/swgoh-ae3.git
+        cd swgoh-ae3
+        cargo build --release -p ae3 --features serve
+        ```
+
+    3. The binary is `target/release/ae3` (`ae3.exe` on Windows).
+
+    On Linux, building the desktop app as well needs the ALSA headers
+    (`libasound2-dev` on Debian and Ubuntu, `alsa-lib-devel` on Fedora).
+
+However you got it, check that it has the command:
+
+```bash
+ae3 serve --help
+```
+
+The macOS and Windows first-launch warnings in
+[Pick your download](#pick-your-download) apply to these builds too.
 
 ## Next
 

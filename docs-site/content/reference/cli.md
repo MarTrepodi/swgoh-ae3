@@ -14,7 +14,7 @@ ae3 [OPTIONS] <COMMAND>
 | [`extract`](#extract) | Export assets |
 | [`diff`](#diff) | Compare two asset versions; optionally export the difference |
 | [`cache`](#cache) | Inspect, prune or clear the download cache |
-| [`serve`](#serve) | Run the HTTP API (builds with the `serve` feature only) |
+| [`serve`](#serve) | Run the HTTP API (only in [builds that include it](../getting-started/install.md#get-the-http-api)) |
 
 `ae3 help <command>` or `ae3 <command> --help` prints each command's full
 help. `ae3 --version` prints AE3's own version.
@@ -479,7 +479,9 @@ Asset Indexes   1 (5.0 MB)
 ## serve
 
 Run the [HTTP API](http-api.md). Only in builds made with
-`--features serve`.
+`--features serve`, such as the `ae3-serve-…` downloads from the
+**HTTP API builds** workflow; see
+[Get the HTTP API](../getting-started/install.md#get-the-http-api).
 
 ```text
 ae3 serve [--bind ADDRESS] [--threads N]
