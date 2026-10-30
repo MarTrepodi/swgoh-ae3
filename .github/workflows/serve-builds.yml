@@ -1,7 +1,13 @@
-# On-demand builds of the ae3 CLI with the HTTP API (`ae3 serve`), which the
-# release archives leave out. Run it from the Actions tab (Run workflow),
-# on any branch or tag; each platform's archive is uploaded as a workflow
-# artifact, not published to a release.
+# Builds of the ae3 CLI with the HTTP API (`ae3 serve`), ae3-serve-<target>
+# beside the plain ae3-<target> archives, in two ways:
+#
+# - On demand (Run workflow in the Actions tab): from the branch it runs on,
+#   or from `ref`, such as a release tag. Each archive is uploaded as a
+#   workflow artifact, ae3-serve-<target>, and kept `retention-days`.
+# - In a release: release.yml calls it as a cargo-dist custom job
+#   (local-artifacts-jobs in Cargo.toml), like macos-app.yml. The uploads are
+#   named artifacts-serve-<target>, so the release attaches them, and
+#   scripts/add-custom-downloads.sh lists them in the release notes.
 #
 # The builds match release.yml's: the dist profile, the same native runners
 # (Ubuntu 22.04 keeps the glibc floor at 2.35), and the same files beside the
@@ -12,10 +18,19 @@ name: HTTP API builds
 on:
   workflow_dispatch:
     inputs:
+      ref:
+        description: Branch, tag or commit to build (empty for the one this runs on)
+        type: string
+        default: ""
       retention-days:
         description: Days to keep the archives
         type: number
         default: 14
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -50,9 +65,11 @@ jobs:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
+      # A release builds its own tag; `ref` is only set on demand.
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - run: rustup toolchain install
 
       - name: Install cargo-about
@@ -107,16 +124,18 @@ jobs:
           {
             echo "### ${{ matrix.name }}"
             echo
-            echo "\`$file\` ($(du -h "$file" | cut -f1)), $("$GITHUB_WORKSPACE/target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" --version), commit \`${GITHUB_SHA::7}\`"
+            echo "\`$file\` ($(du -h "$file" | cut -f1)), $("$GITHUB_WORKSPACE/target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" --version), commit \`$(git -C "$GITHUB_WORKSPACE" rev-parse --short=7 HEAD)\`"
             echo
             echo "\`\`\`text"
             cat "$file.sha256"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # In a release (plan is set), the artifacts-* name is what release.yml
+      # collects and attaches to the GitHub Release.
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.ARCHIVE }}
+          name: ${{ inputs.plan && format('artifacts-serve-{0}', matrix.target) || env.ARCHIVE }}
           path: target/distrib/${{ env.ARCHIVE }}.*
-          retention-days: ${{ inputs.retention-days }}
+          retention-days: ${{ inputs.retention-days || 14 }}
           if-no-files-found: error

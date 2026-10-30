@@ -64,7 +64,9 @@ inherits = "release"
 # One archive per binary per target. macOS is not in this list: the
 # macos-app custom job builds both binaries on one runner, bundles the GUI as
 # swgoh-ae3.app and packs the CLI archive as dist would. The windows-msi
-# custom job adds the Windows installer, swgoh-ae3-windows-x86_64.msi.
+# custom job adds the Windows installer, swgoh-ae3-windows-x86_64.msi, and the
+# serve-builds custom job adds ae3 with the HTTP API, ae3-serve-<target>, for
+# all four targets.
 [workspace.metadata.dist]
 cargo-dist-version = "0.33.0"
 ci = "github"
@@ -85,13 +87,14 @@ include = [
     "THIRD-PARTY-LICENSES.md",
 ]
 github-build-setup = "../build-setup.yml"
-local-artifacts-jobs = ["./macos-app", "./windows-msi"]
+local-artifacts-jobs = ["./macos-app", "./windows-msi", "./serve-builds"]
 pr-run-mode = "plan"
 # release.yml carries one hand edit: its host job publishes with the release
 # token, which may create releases on commits that differ from main in
 # .github/workflows/ (GITHUB_TOKEN may not). dist cannot express that, so it
 # is told not to treat the edited file as out of date. Its custom-windows-msi
-# job was added by hand too, written as dist generates custom-macos-app, and
+# and custom-serve-builds jobs were added by hand too, written as dist
+# generates custom-macos-app, and
 # its release step adds the custom jobs' downloads to the release notes'
 # Download tables (scripts/add-custom-downloads.sh).
 allow-dirty = ["ci"]

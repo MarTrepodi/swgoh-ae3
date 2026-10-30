@@ -76,8 +76,9 @@
 ## HTTP API
 
 ??? question "`unrecognized subcommand 'serve'`"
-    The release downloads don't include the HTTP API. Download an
-    `ae3-serve-…` build from the **HTTP API builds** workflow, or build with
+    The plain `ae3` downloads don't include the HTTP API. Download the
+    `ae3-serve-…` file for your platform from a release (v0.1.4 or later),
+    or build with
     `cargo build --release -p ae3 --features serve`; see
     [Get the HTTP API](getting-started/install.md#get-the-http-api).
 

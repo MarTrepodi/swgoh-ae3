@@ -16,7 +16,8 @@ runtime.
 | Linux aarch64 | `ae3-aarch64-unknown-linux-gnu.tar.xz` → `ae3` | `ae3-gui-aarch64-unknown-linux-gnu.tar.xz` → `ae3-gui` |
 
 Each download has a `.sha256` file beside it on the release page for
-checking the download.
+checking the download. For the HTTP API, use the `ae3-serve-…` downloads
+instead of `ae3-…`; see [Get the HTTP API](#get-the-http-api).
 
 === "Windows"
 
@@ -103,9 +104,10 @@ served from. Your version number will be newer.
 
 ## Get the HTTP API
 
-The HTTP API (`ae3 serve`) is an optional feature that the release
-downloads **do not include**. The **HTTP API builds** workflow builds an
-`ae3` that has it, for the same four platforms as the releases:
+The HTTP API (`ae3 serve`) is an optional feature, so the `ae3` downloads
+above leave it out. Every release from v0.1.4 on also has an `ae3` with it
+built in, for the same four platforms, under **Download ae3 *version* with
+the HTTP API** in the release notes:
 
 | Platform | Download | Contains |
 |---|---|---|
@@ -114,28 +116,42 @@ downloads **do not include**. The **HTTP API builds** workflow builds an
 | Linux x86_64 | `ae3-serve-x86_64-unknown-linux-gnu.tar.xz` | `ae3-serve-x86_64-unknown-linux-gnu/ae3` |
 | Linux aarch64 | `ae3-serve-aarch64-unknown-linux-gnu.tar.xz` | `ae3-serve-aarch64-unknown-linux-gnu/ae3` |
 
-Each also holds the license files, as the release downloads do, and has a
-`.sha256` checksum beside it. These builds are workflow artifacts, not
-releases: they are kept for 14 days by default, and downloading them needs
-a GitHub account.
+Each holds the same license files as the other downloads and has a
+`.sha256` beside it. Use it in place of the plain `ae3`: it does everything
+that does, plus `serve`.
 
-=== "GitHub website"
+=== "From a release"
 
-    1. Open the repository's
+    Download your platform's `ae3-serve-…` file from the
+    [Releases page](https://github.com/MarTrepodi/swgoh-ae3/releases) and
+    extract it as in [Pick your download](#pick-your-download).
+
+    With the [GitHub CLI](https://cli.github.com):
+
+    ```bash
+    gh release download --repo MarTrepodi/swgoh-ae3 -p 'ae3-serve-x86_64-unknown-linux-gnu.tar.xz*'
+    sha256sum -c ae3-serve-x86_64-unknown-linux-gnu.tar.xz.sha256
+    tar -xf ae3-serve-x86_64-unknown-linux-gnu.tar.xz
+    ```
+
+    Swap in your platform's name from the table. On macOS, use
+    `shasum -a 256 -c` instead of `sha256sum -c`.
+
+=== "From an unreleased commit"
+
+    The **HTTP API builds** workflow builds the same downloads from any
+    branch, tag or commit. Its builds are workflow artifacts, not releases:
+    they are kept for 14 days by default, and downloading them needs a
+    GitHub account.
+
+    1. Open
        [**Actions → HTTP API builds**](https://github.com/MarTrepodi/swgoh-ae3/actions/workflows/serve-builds.yml)
-       page and pick the latest run with a green check.
+       and pick the latest run with a green check.
     2. Under **Artifacts** at the bottom of the run, download
        `ae3-serve-<your platform>`. GitHub delivers it as a `.zip` holding
-       the archive and its `.sha256`.
-    3. Unzip it, then extract the archive inside as in
-       [Pick your download](#pick-your-download).
+       the archive and its `.sha256`; unzip it, then extract the archive.
 
-    No recent run, or the builds have expired? Anyone with write access to
-    the repository can start one with **Run workflow** on the same page.
-
-=== "gh CLI"
-
-    With the [GitHub CLI](https://cli.github.com), signed in:
+    Or with the GitHub CLI:
 
     ```bash
     run=$(gh run list --repo MarTrepodi/swgoh-ae3 --workflow serve-builds.yml \
@@ -143,17 +159,8 @@ a GitHub account.
     gh run download "$run" --repo MarTrepodi/swgoh-ae3 -n ae3-serve-x86_64-unknown-linux-gnu
     ```
 
-    Swap in your platform's name from the table. `gh run download` unzips the
-    artifact, leaving the archive and its `.sha256` in the current folder.
-    Check and extract it:
-
-    ```bash
-    sha256sum -c ae3-serve-x86_64-unknown-linux-gnu.tar.xz.sha256
-    tar -xf ae3-serve-x86_64-unknown-linux-gnu.tar.xz
-    ```
-
-    (On macOS, `shasum -a 256 -c` instead of `sha256sum -c`.) To start a new
-    build, if you have write access:
+    Anyone with write access to the repository can start a build with
+    **Run workflow**, optionally naming a `ref` to build:
 
     ```bash
     gh workflow run serve-builds.yml --repo MarTrepodi/swgoh-ae3 --ref main
