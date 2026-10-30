@@ -76,8 +76,10 @@
 ## HTTP API
 
 ??? question "`unrecognized subcommand 'serve'`"
-    The release downloads don't include the HTTP API. Build with
-    `cargo build --release -p ae3 --features serve`.
+    The release downloads don't include the HTTP API. Download an
+    `ae3-serve-…` build from the **HTTP API builds** workflow, or build with
+    `cargo build --release -p ae3 --features serve`; see
+    [Get the HTTP API](getting-started/install.md#get-the-http-api).
 
 ??? question "`/Asset/single` returns a different texture than I wanted"
     It returns `tex.{assetName}`, or the bundle's first texture. For any

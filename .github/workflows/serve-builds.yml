@@ -1,0 +1,122 @@
+# On-demand builds of the ae3 CLI with the HTTP API (`ae3 serve`), which the
+# release archives leave out. Run it from the Actions tab (Run workflow),
+# on any branch or tag; each platform's archive is uploaded as a workflow
+# artifact, not published to a release.
+#
+# The builds match release.yml's: the dist profile, the same native runners
+# (Ubuntu 22.04 keeps the glibc floor at 2.35), and the same files beside the
+# binary. THIRD-PARTY-LICENSES.md is generated with the serve feature on, so
+# it covers tiny_http, which the release graph does not include.
+name: HTTP API builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention-days:
+        description: Days to keep the archives
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ae3 serve (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            exe: .exe
+          - name: macOS arm64
+            target: aarch64-apple-darwin
+            runner: macos-14
+          - name: Linux x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - name: Linux aarch64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCHIVE: ae3-serve-${{ matrix.target }}
+    steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      - name: Generate THIRD-PARTY-LICENSES.md
+        run: |
+          cargo fetch --locked
+          cargo about generate --workspace --features ae3/serve --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
+
+      - name: Build ae3 with the serve feature
+        run: cargo build --profile dist --locked -p ae3 --features serve --target ${{ matrix.target }}
+
+      # Every runner is native, so the binary can run here: the build must
+      # have the serve command, or the archive is useless.
+      - name: Check the binary serves
+        run: |
+          bin=target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}
+          "$bin" --version
+          "$bin" serve --help > /dev/null
+
+      # The layout release.yml's archives use: a zip with the files at its
+      # root on Windows, else a .tar.xz holding one top-level folder.
+      - name: Pack ${{ env.ARCHIVE }}
+        run: |
+          stage="$RUNNER_TEMP/stage/$ARCHIVE"
+          out="$GITHUB_WORKSPACE/target/distrib"
+          mkdir -p "$stage" "$out"
+          cp "target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" "$stage/"
+          cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md \
+            crates/ae3-audio/THIRD-PARTY-NOTICES.md "$stage/"
+          # No builder's user name in the archive; on macOS (bsdtar), no
+          # extended attributes or resource forks either.
+          case "$RUNNER_OS" in
+            Windows)
+              file="$ARCHIVE.zip"
+              (cd "$stage" && 7z a -tzip -bso0 "$out/$file" .) ;;
+            macOS)
+              file="$ARCHIVE.tar.xz"
+              (cd "$RUNNER_TEMP/stage" && COPYFILE_DISABLE=1 tar --no-xattrs --uid 0 --gid 0 --uname "" --gname "" -cJf "$out/$file" "$ARCHIVE") ;;
+            *)
+              file="$ARCHIVE.tar.xz"
+              (cd "$RUNNER_TEMP/stage" && tar --owner 0 --group 0 --numeric-owner -cJf "$out/$file" "$ARCHIVE") ;;
+          esac
+          cd "$out"
+          if command -v sha256sum > /dev/null; then
+            sha256sum -b "$file" > "$file.sha256"
+          else
+            shasum -a 256 -b "$file" > "$file.sha256"
+          fi
+          {
+            echo "### ${{ matrix.name }}"
+            echo
+            echo "\`$file\` ($(du -h "$file" | cut -f1)), $("$GITHUB_WORKSPACE/target/${{ matrix.target }}/dist/ae3${{ matrix.exe }}" --version), commit \`${GITHUB_SHA::7}\`"
+            echo
+            echo "\`\`\`text"
+            cat "$file.sha256"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: target/distrib/${{ env.ARCHIVE }}.*
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
