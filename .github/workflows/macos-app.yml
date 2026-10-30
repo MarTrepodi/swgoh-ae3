@@ -3,8 +3,10 @@
 # the GitHub Release. It ships the macOS GUI as swgoh-ae3.app, which dist cannot
 # build: zipped, and as a disk image (swgoh-ae3-macos-arm64.dmg). It also packs
 # the macOS CLI archive (ae3-aarch64-apple-darwin.tar.xz) from the same build,
-# so dist's targets leave out aarch64-apple-darwin and a release starts one
-# macOS runner, the costliest kind, instead of two.
+# and the macOS CLI with the HTTP API (ae3-serve-aarch64-apple-darwin.tar.xz,
+# which serve-builds.yml makes for the other targets), so dist's targets leave
+# out aarch64-apple-darwin and a release starts one macOS runner, the
+# costliest kind, instead of three.
 name: macOS app
 
 on:
@@ -50,12 +52,26 @@ jobs:
           version=$(jq -r '[.releases[] | select(.app_name == "ae3-gui")][0].app_version' <<< "$PLAN")
           packaging/macos/bundle-app.sh target/aarch64-apple-darwin/dist/ae3-gui "$version" target/distrib
 
+      # ae3 with the HTTP API, as serve-builds.yml builds it elsewhere. It
+      # comes after the archive and the app are packed: its license file
+      # adds tiny_http, and its build replaces the plain ae3 binary.
+      - name: Generate THIRD-PARTY-LICENSES.md for ae3 with the HTTP API
+        run: cargo about generate --workspace --features ae3/serve --frozen --fail -c packaging/about.toml -o THIRD-PARTY-LICENSES.md packaging/about.hbs
+      - name: Build ae3 with the serve feature
+        run: cargo build --profile dist --locked -p ae3 --features serve --target aarch64-apple-darwin
+      - name: Check the binary serves
+        run: target/aarch64-apple-darwin/dist/ae3 serve --help > /dev/null
+      - name: Pack ae3-serve-aarch64-apple-darwin.tar.xz
+        run: packaging/macos/archive-cli.sh target/aarch64-apple-darwin/dist/ae3 target/distrib ae3-serve-aarch64-apple-darwin
+
       - uses: actions/upload-artifact@v7
         with:
           name: artifacts-macos-app
           path: |
             target/distrib/ae3-aarch64-apple-darwin.tar.xz
             target/distrib/ae3-aarch64-apple-darwin.tar.xz.sha256
+            target/distrib/ae3-serve-aarch64-apple-darwin.tar.xz
+            target/distrib/ae3-serve-aarch64-apple-darwin.tar.xz.sha256
             target/distrib/ae3-gui-aarch64-apple-darwin.zip
             target/distrib/ae3-gui-aarch64-apple-darwin.zip.sha256
             target/distrib/swgoh-ae3-macos-arm64.dmg
