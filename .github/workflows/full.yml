@@ -268,27 +268,56 @@ jobs:
 
   # Nightly runs have no pull request to show their result, so a failure
   # opens a nightly-failure issue (or comments on the open one) listing the
-  # failed jobs, and the next passing run closes it. Runs the gate skipped
-  # (no new code) tested nothing and report nothing.
+  # failed jobs, and the next passing run closes it. A run the gate skipped
+  # (no new code) built nothing, so it closes an open issue only when a
+  # passing run already built main's code: then the failure was not the
+  # code's (the gate itself failing on a GitHub API error, say).
   report:
     name: Nightly report
-    if: always() && github.event_name == 'schedule' && (needs.gate.result != 'success' || needs.gate.outputs.run == 'true')
+    if: always() && github.event_name == 'schedule'
     needs: [gate, result]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      contents: read
       issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: nightly-failure
+      RESULT: ${{ needs.result.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SKIPPED: ${{ needs.gate.result == 'success' && needs.gate.outputs.run != 'true' }}
     steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RESULT: ${{ needs.result.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - id: issues
         run: |
-          label=nightly-failure
-          gh label create "$label" --color B60205 \
+          gh label create "$LABEL" --color B60205 \
             --description "The nightly full CI run is failing" --force
-          open=$(gh issue list --label "$label" --state open --json number --jq '.[].number')
+          open=$(gh issue list --label "$LABEL" --state open --json number --jq '[.[].number] | join(" ")')
+          echo "open=$open" >> "$GITHUB_OUTPUT"
+
+      - if: env.SKIPPED == 'true' && steps.issues.outputs.open != ''
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - if: env.SKIPPED == 'true' && steps.issues.outputs.open != ''
+        env:
+          OPEN: ${{ steps.issues.outputs.open }}
+        run: |
+          if [[ "$(bash scripts/full-ci-needed.sh --passed "$GITHUB_SHA")" == false ]]; then
+            for issue in $OPEN; do
+              gh issue close "$issue" --comment "A passing full CI run already built main's code (\`${GITHUB_SHA:0:7}\`), so the failure was not the code's: $RUN_URL"
+            done
+          else
+            echo "No passing run built main's code yet; leaving $OPEN open."
+          fi
+
+      - if: env.SKIPPED != 'true'
+        env:
+          OPEN: ${{ steps.issues.outputs.open }}
+        run: |
+          label=$LABEL
+          open=$OPEN
 
           if [[ "$RESULT" == "success" ]]; then
             for issue in $open; do

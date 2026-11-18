@@ -29,9 +29,25 @@ fi
 commit=$(git rev-parse "${1:-HEAD}^{commit}")
 repo=${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 
+# GitHub's API now and then answers with a 5xx error or times out, and a
+# failed nightly gate opens a nightly-failure issue, so each call gets four
+# tries, 5, 10 and 20 seconds apart (GH_RETRY_DELAY sets the first wait).
+gh_retry() {
+  local attempt delay=${GH_RETRY_DELAY:-5}
+  for attempt in 1 2 3 4; do
+    if gh "$@"; then
+      return 0
+    fi
+    (( attempt < 4 )) || return 1
+    echo "gh $1 failed (try $attempt of 4); retrying in ${delay}s." >&2
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+}
+
 # Completed runs, newest first. Cancelled runs may not have built at all.
 if $passed; then counted='"success"'; else counted='"success", "failure"'; fi
-runs=$(gh run list --repo "$repo" --workflow full.yml --status completed --limit 50 \
+runs=$(gh_retry run list --repo "$repo" --workflow full.yml --status completed --limit 50 \
   --json databaseId,headSha,conclusion \
   --jq ".[] | select(.conclusion | IN($counted)) | \"\\(.databaseId) \\(.headSha)\"")
 
@@ -50,7 +66,7 @@ while read -r id sha; do
   git cat-file -e "$sha^{commit}" 2>/dev/null || continue
   [[ -z "$(code_changes "$sha" "$commit")" ]] || continue
   # Same code; did that run build it, or did its gate skip the build?
-  built=$(gh api "repos/$repo/actions/runs/$id/jobs?per_page=100" \
+  built=$(gh_retry api "repos/$repo/actions/runs/$id/jobs?per_page=100" \
     --jq '[.jobs[] | select(.name | startswith("Full (")) | select(.conclusion == "success" or .conclusion == "failure")] | length')
   if (( built > 0 )); then
     echo "Run $id already built this code (at ${sha:0:7})." >&2
